@@ -7,11 +7,18 @@ from datetime import datetime
 import elering
 import config
 
+
 class TrayIcon:
 
     def __init__(self):
-        price = elering.get_current_estonia_price()
-        self.price = price["cents_kwh"]
+        prices = elering.get_current_and_next_estonia_price()
+
+        self.price = prices["current"]["cents_kwh"]
+
+        if prices["next"] is not None:
+            self.next_price = prices["next"]["cents_kwh"]
+        else:
+            self.next_price = None
 
         self.icon = pystray.Icon(
             "ElectricityTray",
@@ -42,20 +49,34 @@ class TrayIcon:
     def create_icon(self, price):
         """Создаёт иконку: цена сверху, молния снизу."""
 
-        image = Image.new("RGB", (64, 64), "white")
+        image = Image.new(
+            "RGB",
+            (64, 64),
+            "white"
+        )
+
         draw = ImageDraw.Draw(image)
 
-        # Используем стандартный шрифт Windows
+        # Используем стандартный жирный Arial Windows
         try:
-            font = ImageFont.truetype("arialbd.ttf", 34)
+            font = ImageFont.truetype(
+                "arialbd.ttf",
+                34
+            )
+
         except OSError:
             font = ImageFont.load_default()
 
         # Цена с одним знаком после запятой
         price_text = f"{price:.1f}"
 
-        # Центрируем текст
-        bbox = draw.textbbox((0, 0), price_text, font=font)
+        # Центрируем цену
+        bbox = draw.textbbox(
+            (0, 0),
+            price_text,
+            font=font
+        )
+
         text_width = bbox[2] - bbox[0]
 
         x = (64 - text_width) // 2
@@ -65,6 +86,11 @@ class TrayIcon:
             price_text,
             font=font,
             fill="black",
+        )
+
+        # Определяем цвет молнии
+        lightning_color = self.get_price_color(
+            price
         )
 
         # Молния в нижней части иконки
@@ -77,69 +103,121 @@ class TrayIcon:
                 (45, 43),
                 (35, 43),
             ],
-            fill=self.get_price_color(price),
+            fill=lightning_color,
             outline="black",
         )
 
         return image
 
     def create_tooltip(self):
-        return f"Nord Pool Estonia: {self.price:.2f} c/kWh"
+        """Создаёт подсказку при наведении мыши."""
+
+        if self.next_price is not None:
+
+            return (
+                f"Nord Pool Estonia\n"
+                f"Сейчас: {self.price:.2f} c/kWh\n"
+                f"Следующие 15 мин: "
+                f"{self.next_price:.2f} c/kWh"
+            )
+
+        return (
+            f"Nord Pool Estonia\n"
+            f"Сейчас: {self.price:.2f} c/kWh\n"
+            f"Следующая цена недоступна"
+        )
+
+    def update_prices(self):
+        """Получает свежие цены и обновляет иконку."""
+
+        prices = (
+            elering.get_current_and_next_estonia_price()
+        )
+
+        self.price = (
+            prices["current"]["cents_kwh"]
+        )
+
+        if prices["next"] is not None:
+
+            self.next_price = (
+                prices["next"]["cents_kwh"]
+            )
+
+        else:
+            self.next_price = None
+
+        # Перерисовываем иконку
+        self.icon.icon = self.create_icon(
+            self.price
+        )
+
+        # Обновляем текст подсказки
+        self.icon.title = self.create_tooltip()
 
     def refresh(self, icon, item):
         """Обновляет цену вручную."""
 
         try:
-            price = elering.get_current_estonia_price()
-            self.price = price["cents_kwh"]
-
-            self.icon.icon = self.create_icon(self.price)
-            self.icon.title = self.create_tooltip()
+            self.update_prices()
 
         except Exception as error:
-            self.icon.title = f"Ошибка обновления: {error}"
-
+            self.icon.title = (
+                f"Ошибка обновления: {error}"
+            )
 
     def auto_update_loop(self):
-        """Автоматически обновляет цену каждые 15 минут."""
+        """
+        Автоматически обновляет цену
+        на границах 15-минутных интервалов.
+        """
 
         while self.running:
+
             now = datetime.now()
 
-            minutes_until_next = 15 - (now.minute % 15)
+            minutes_until_next = (
+                15 - (now.minute % 15)
+            )
 
             seconds_until_next = (
                 minutes_until_next * 60
                 - now.second
             )
 
-            # Ждём ещё 5 секунд после начала нового интервала
+            # Небольшая задержка после начала
+            # нового рыночного интервала
             seconds_until_next += 5
 
-            time.sleep(seconds_until_next)
+            time.sleep(
+                seconds_until_next
+            )
 
             if not self.running:
                 break
 
             try:
-                price = elering.get_current_estonia_price()
-                self.price = price["cents_kwh"]
-
-                self.icon.icon = self.create_icon(self.price)
-                self.icon.title = self.create_tooltip()
+                self.update_prices()
 
             except Exception as error:
-                self.icon.title = f"Ошибка обновления: {error}"
+                self.icon.title = (
+                    f"Ошибка обновления: {error}"
+                )
 
     def exit_program(self, icon, item):
+        """Завершает программу."""
+
         self.running = False
         icon.stop()
 
     def run(self):
+        """Запускает автоматическое обновление и tray."""
+
         update_thread = threading.Thread(
             target=self.auto_update_loop,
             daemon=True,
         )
 
         update_thread.start()
+
         self.icon.run()
