@@ -11,10 +11,16 @@ class PricePanel:
         self.root = tk.Tk()
 
         self.root.title("Electricity Estonia")
-        self.root.geometry("320x220")
+
+        # Размер панели
+        self.window_width = 320
+        self.window_height = 220
+
+        self.root.geometry(f"{self.window_width}x{self.window_height}")
+
         self.root.resizable(False, False)
 
-        # Основной заголовок
+        # Заголовок
         title = tk.Label(
             self.root,
             text="ELECTRICITY · ESTONIA",
@@ -37,12 +43,12 @@ class PricePanel:
         )
         current_label.pack()
 
-        # Текущий интервал времени
+        # Определяем текущий 15-минутный интервал
         now = datetime.now()
 
         interval_minute = (now.minute // 15) * 15
 
-        interval_text = f"{now.hour:02d}:{interval_minute:02d}"
+        interval_text = f"{now.hour:02d}:" f"{interval_minute:02d}"
 
         time_label = tk.Label(
             self.root,
@@ -73,6 +79,31 @@ class PricePanel:
         )
         close_button.pack(pady=15)
 
+        # После создания элементов
+        # располагаем окно возле часов
+        self.position_near_tray()
+
+    def position_near_tray(self):
+        """Размещает панель в правом нижнем углу экрана."""
+
+        self.root.update_idletasks()
+
+        screen_width = self.root.winfo_screenwidth()
+
+        screen_height = self.root.winfo_screenheight()
+
+        # Небольшой отступ справа
+        margin_right = 10
+
+        # Высота панели задач Windows 10.
+        # Пока используем безопасный запас.
+        taskbar_height = 50
+
+        x = screen_width - self.window_width - margin_right
+
+        y = screen_height - self.window_height - taskbar_height
+
+        self.root.geometry(f"{self.window_width}x" f"{self.window_height}" f"+{x}+{y}")
+
     def run(self):
         self.root.mainloop()
-
