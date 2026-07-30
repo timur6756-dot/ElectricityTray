@@ -1,13 +1,16 @@
 from PIL import Image, ImageDraw, ImageFont
 import pystray
+import threading
+import time
+from datetime import datetime
 
-from elering import get_current_estonia_price
+import elering
 
 
 class TrayIcon:
 
     def __init__(self):
-        price = get_current_estonia_price()
+        price = elering.get_current_estonia_price()
         self.price = price["cents_kwh"]
 
         self.icon = pystray.Icon(
@@ -19,6 +22,8 @@ class TrayIcon:
                 pystray.MenuItem("Выход", self.exit_program),
             ),
         )
+
+        self.running = True
 
     def create_icon(self, price):
         """Создаёт иконку: цена сверху, молния снизу."""
@@ -71,7 +76,7 @@ class TrayIcon:
         """Обновляет цену вручную."""
 
         try:
-            price = get_current_estonia_price()
+            price = elering.get_current_estonia_price()
             self.price = price["cents_kwh"]
 
             self.icon.icon = self.create_icon(self.price)
@@ -80,8 +85,47 @@ class TrayIcon:
         except Exception as error:
             self.icon.title = f"Ошибка обновления: {error}"
 
+
+    def auto_update_loop(self):
+        """Автоматически обновляет цену каждые 15 минут."""
+
+        while self.running:
+            now = datetime.now()
+
+            minutes_until_next = 15 - (now.minute % 15)
+
+            seconds_until_next = (
+                minutes_until_next * 60
+                - now.second
+            )
+
+            # Ждём ещё 5 секунд после начала нового интервала
+            seconds_until_next += 5
+
+            time.sleep(seconds_until_next)
+
+            if not self.running:
+                break
+
+            try:
+                price = elering.get_current_estonia_price()
+                self.price = price["cents_kwh"]
+
+                self.icon.icon = self.create_icon(self.price)
+                self.icon.title = self.create_tooltip()
+
+            except Exception as error:
+                self.icon.title = f"Ошибка обновления: {error}"
+
     def exit_program(self, icon, item):
+        self.running = False
         icon.stop()
 
     def run(self):
+        update_thread = threading.Thread(
+            target=self.auto_update_loop,
+            daemon=True,
+        )
+
+        update_thread.start()
         self.icon.run()
