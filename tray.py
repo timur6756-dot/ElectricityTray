@@ -6,6 +6,7 @@ from datetime import datetime
 
 import elering
 import config
+from panel import PricePanel
 
 
 class TrayIcon:
@@ -25,6 +26,7 @@ class TrayIcon:
             self.create_icon(self.price),
             self.create_tooltip(),
             menu=pystray.Menu(
+                pystray.MenuItem("Открыть панель", self.open_panel),
                 pystray.MenuItem("Обновить", self.refresh),
                 pystray.MenuItem("Выход", self.exit_program),
             ),
@@ -52,29 +54,26 @@ class TrayIcon:
         image = Image.new(
             "RGB",
             (64, 64),
-            "white"
+            "white",
         )
 
         draw = ImageDraw.Draw(image)
 
-        # Используем стандартный жирный Arial Windows
         try:
             font = ImageFont.truetype(
                 "arialbd.ttf",
-                34
+                34,
             )
 
         except OSError:
             font = ImageFont.load_default()
 
-        # Цена с одним знаком после запятой
         price_text = f"{price:.1f}"
 
-        # Центрируем цену
         bbox = draw.textbbox(
             (0, 0),
             price_text,
-            font=font
+            font=font,
         )
 
         text_width = bbox[2] - bbox[0]
@@ -88,12 +87,10 @@ class TrayIcon:
             fill="black",
         )
 
-        # Определяем цвет молнии
         lightning_color = self.get_price_color(
             price
         )
 
-        # Молния в нижней части иконки
         draw.polygon(
             [
                 (31, 34),
@@ -110,10 +107,9 @@ class TrayIcon:
         return image
 
     def create_tooltip(self):
-        """Создаёт подсказку при наведении мыши."""
+        """Создаёт подсказку при наведении."""
 
         if self.next_price is not None:
-
             return (
                 f"Nord Pool Estonia\n"
                 f"Сейчас: {self.price:.2f} c/kWh\n"
@@ -128,7 +124,7 @@ class TrayIcon:
         )
 
     def update_prices(self):
-        """Получает свежие цены и обновляет иконку."""
+        """Получает свежие цены."""
 
         prices = (
             elering.get_current_and_next_estonia_price()
@@ -139,21 +135,37 @@ class TrayIcon:
         )
 
         if prices["next"] is not None:
-
             self.next_price = (
                 prices["next"]["cents_kwh"]
             )
-
         else:
             self.next_price = None
 
-        # Перерисовываем иконку
         self.icon.icon = self.create_icon(
             self.price
         )
 
-        # Обновляем текст подсказки
         self.icon.title = self.create_tooltip()
+
+    def open_panel(self, icon, item):
+        """Открывает информационную панель."""
+
+        panel_thread = threading.Thread(
+            target=self.run_panel,
+            daemon=True,
+        )
+
+        panel_thread.start()
+
+    def run_panel(self):
+        """Запускает окно панели."""
+
+        panel = PricePanel(
+            current_price=self.price,
+            next_price=self.next_price,
+        )
+
+        panel.run()
 
     def refresh(self, icon, item):
         """Обновляет цену вручную."""
@@ -185,8 +197,6 @@ class TrayIcon:
                 - now.second
             )
 
-            # Небольшая задержка после начала
-            # нового рыночного интервала
             seconds_until_next += 5
 
             time.sleep(
@@ -211,7 +221,7 @@ class TrayIcon:
         icon.stop()
 
     def run(self):
-        """Запускает автоматическое обновление и tray."""
+        """Запускает обновление и tray."""
 
         update_thread = threading.Thread(
             target=self.auto_update_loop,
