@@ -21,21 +21,45 @@ class TrayIcon:
         else:
             self.next_price = None
 
+        # Сколько данных на завтра
+        # было известно при последней проверке.
+        self.tomorrow_count = 0
+
+        try:
+            tomorrow = elering.get_tomorrow_hourly_prices()
+
+            self.tomorrow_count = len(tomorrow)
+
+        except Exception:
+            self.tomorrow_count = 0
+
         self.icon = pystray.Icon(
             "ElectricityTray",
             self.create_icon(self.price),
             self.create_tooltip(),
             menu=pystray.Menu(
-                pystray.MenuItem("Открыть панель", self.open_panel),
-                pystray.MenuItem("Обновить", self.refresh),
-                pystray.MenuItem("Выход", self.exit_program),
+                pystray.MenuItem(
+                    "Открыть панель",
+                    self.open_panel,
+                ),
+                pystray.MenuItem(
+                    "Обновить",
+                    self.refresh,
+                ),
+                pystray.MenuItem(
+                    "Выход",
+                    self.exit_program,
+                ),
             ),
         )
 
         self.running = True
 
-    def get_price_color(self, price):
-        """Возвращает цвет молнии в зависимости от цены."""
+    def get_price_color(
+        self,
+        price,
+    ):
+        """Цвет молнии по текущей цене."""
 
         if price < config.PRICE_CHEAP:
             return "green"
@@ -48,8 +72,11 @@ class TrayIcon:
 
         return "red"
 
-    def create_icon(self, price):
-        """Создаёт иконку: цена сверху, молния снизу."""
+    def create_icon(
+        self,
+        price,
+    ):
+        """Цена сверху, молния снизу."""
 
         image = Image.new(
             "RGB",
@@ -87,9 +114,7 @@ class TrayIcon:
             fill="black",
         )
 
-        lightning_color = self.get_price_color(
-            price
-        )
+        lightning_color = self.get_price_color(price)
 
         draw.polygon(
             [
@@ -107,47 +132,71 @@ class TrayIcon:
         return image
 
     def create_tooltip(self):
-        """Создаёт подсказку при наведении."""
+        """Подсказка tray."""
+
+        lines = [
+            "Nord Pool Estonia",
+            (f"Сейчас: " f"{self.price:.2f} c/kWh"),
+        ]
 
         if self.next_price is not None:
-            return (
-                f"Nord Pool Estonia\n"
-                f"Сейчас: {self.price:.2f} c/kWh\n"
-                f"Следующие 15 мин: "
-                f"{self.next_price:.2f} c/kWh"
-            )
+            lines.append("Следующие 15 мин: " f"{self.next_price:.2f} " "c/kWh")
 
-        return (
-            f"Nord Pool Estonia\n"
-            f"Сейчас: {self.price:.2f} c/kWh\n"
-            f"Следующая цена недоступна"
-        )
+        if self.tomorrow_count > 0:
+            lines.append("Завтра опубликовано: " f"{self.tomorrow_count}/24 ч")
+        else:
+            lines.append("Завтра: данных пока нет")
+
+        return "\n".join(lines)
 
     def update_prices(self):
-        """Получает свежие цены."""
+        """Обновляет текущие 15-минутные цены."""
 
-        prices = (
-            elering.get_current_and_next_estonia_price()
-        )
+        prices = elering.get_current_and_next_estonia_price()
 
-        self.price = (
-            prices["current"]["cents_kwh"]
-        )
+        self.price = prices["current"]["cents_kwh"]
 
         if prices["next"] is not None:
-            self.next_price = (
-                prices["next"]["cents_kwh"]
-            )
+            self.next_price = prices["next"]["cents_kwh"]
         else:
             self.next_price = None
 
-        self.icon.icon = self.create_icon(
-            self.price
-        )
+        self.icon.icon = self.create_icon(self.price)
 
         self.icon.title = self.create_tooltip()
 
-    def open_panel(self, icon, item):
+    def update_tomorrow_prices(self):
+        """Проверяет появление новых данных на завтра."""
+
+        tomorrow = elering.get_tomorrow_hourly_prices()
+
+        new_count = len(tomorrow)
+
+        old_count = self.tomorrow_count
+
+        self.tomorrow_count = new_count
+
+        self.icon.title = self.create_tooltip()
+
+        # Windows notification от pystray
+        # используем только если реально
+        # появились новые значения.
+        if new_count > old_count:
+
+            try:
+                self.icon.notify(
+                    ("Опубликованы новые " "цены на завтра: " f"{new_count}/24 часов"),
+                    "Electricity Estonia",
+                )
+
+            except Exception:
+                pass
+
+    def open_panel(
+        self,
+        icon,
+        item,
+    ):
         """Открывает информационную панель."""
 
         panel_thread = threading.Thread(
@@ -158,7 +207,7 @@ class TrayIcon:
         panel_thread.start()
 
     def run_panel(self):
-        """Запускает окно панели."""
+        """Запускает PricePanel."""
 
         panel = PricePanel(
             current_price=self.price,
@@ -167,20 +216,23 @@ class TrayIcon:
 
         panel.run()
 
-    def refresh(self, icon, item):
-        """Обновляет цену вручную."""
+    def refresh(
+        self,
+        icon,
+        item,
+    ):
+        """Ручное обновление всего."""
 
         try:
             self.update_prices()
+            self.update_tomorrow_prices()
 
         except Exception as error:
-            self.icon.title = (
-                f"Ошибка обновления: {error}"
-            )
+            self.icon.title = f"Ошибка обновления: " f"{error}"
 
-    def auto_update_loop(self):
+    def current_price_loop(self):
         """
-        Автоматически обновляет цену
+        Текущая цена обновляется
         на границах 15-минутных интервалов.
         """
 
@@ -188,20 +240,11 @@ class TrayIcon:
 
             now = datetime.now()
 
-            minutes_until_next = (
-                15 - (now.minute % 15)
-            )
+            minutes_until_next = 15 - (now.minute % 15)
 
-            seconds_until_next = (
-                minutes_until_next * 60
-                - now.second
-            )
+            seconds_until_next = minutes_until_next * 60 - now.second + 5
 
-            seconds_until_next += 5
-
-            time.sleep(
-                seconds_until_next
-            )
+            time.sleep(seconds_until_next)
 
             if not self.running:
                 break
@@ -210,24 +253,54 @@ class TrayIcon:
                 self.update_prices()
 
             except Exception as error:
-                self.icon.title = (
-                    f"Ошибка обновления: {error}"
-                )
+                self.icon.title = f"Ошибка цены: " f"{error}"
 
-    def exit_program(self, icon, item):
-        """Завершает программу."""
+    def tomorrow_price_loop(self):
+        """
+        Фоновая проверка завтрашних цен
+        каждые 15 минут.
+        """
+
+        while self.running:
+
+            # 15 минут
+            time.sleep(15 * 60)
+
+            if not self.running:
+                break
+
+            try:
+                self.update_tomorrow_prices()
+
+            except Exception:
+                # Ошибка сети не должна
+                # останавливать приложение.
+                pass
+
+    def exit_program(
+        self,
+        icon,
+        item,
+    ):
+        """Завершает приложение."""
 
         self.running = False
         icon.stop()
 
     def run(self):
-        """Запускает обновление и tray."""
+        """Запускает фоновые потоки и tray."""
 
-        update_thread = threading.Thread(
-            target=self.auto_update_loop,
+        current_thread = threading.Thread(
+            target=self.current_price_loop,
             daemon=True,
         )
 
-        update_thread.start()
+        tomorrow_thread = threading.Thread(
+            target=self.tomorrow_price_loop,
+            daemon=True,
+        )
+
+        current_thread.start()
+        tomorrow_thread.start()
 
         self.icon.run()
