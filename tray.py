@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 
 import elering
-
+import config
 
 class TrayIcon:
 
@@ -24,6 +24,20 @@ class TrayIcon:
         )
 
         self.running = True
+
+    def get_price_color(self, price):
+        """Возвращает цвет молнии в зависимости от цены."""
+
+        if price < config.PRICE_CHEAP:
+            return "green"
+
+        if price < config.PRICE_NORMAL:
+            return "gold"
+
+        if price < config.PRICE_EXPENSIVE:
+            return "orange"
+
+        return "red"
 
     def create_icon(self, price):
         """Создаёт иконку: цена сверху, молния снизу."""
@@ -63,7 +77,7 @@ class TrayIcon:
                 (45, 43),
                 (35, 43),
             ],
-            fill="gold",
+            fill=self.get_price_color(price),
             outline="black",
         )
 
