@@ -1,5 +1,15 @@
+import ctypes
 import tkinter as tk
 from datetime import datetime
+
+
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
 
 
 class PricePanel:
@@ -9,10 +19,8 @@ class PricePanel:
         self.next_price = next_price
 
         self.root = tk.Tk()
-
         self.root.title("Electricity Estonia")
 
-        # Размер панели
         self.window_width = 320
         self.window_height = 220
 
@@ -20,7 +28,6 @@ class PricePanel:
 
         self.root.resizable(False, False)
 
-        # Заголовок
         title = tk.Label(
             self.root,
             text="ELECTRICITY · ESTONIA",
@@ -28,7 +35,6 @@ class PricePanel:
         )
         title.pack(pady=(15, 5))
 
-        # Текущая цена
         current = tk.Label(
             self.root,
             text=f"{self.current_price:.2f} c/kWh",
@@ -43,7 +49,6 @@ class PricePanel:
         )
         current_label.pack()
 
-        # Определяем текущий 15-минутный интервал
         now = datetime.now()
 
         interval_minute = (now.minute // 15) * 15
@@ -57,7 +62,6 @@ class PricePanel:
         )
         time_label.pack(pady=(12, 5))
 
-        # Следующая цена
         if self.next_price is not None:
             next_text = f"Следующие 15 мин: " f"{self.next_price:.2f} c/kWh"
         else:
@@ -70,7 +74,6 @@ class PricePanel:
         )
         next_label.pack(pady=5)
 
-        # Кнопка закрытия
         close_button = tk.Button(
             self.root,
             text="Закрыть",
@@ -79,29 +82,51 @@ class PricePanel:
         )
         close_button.pack(pady=15)
 
-        # После создания элементов
-        # располагаем окно возле часов
         self.position_near_tray()
 
+    def get_work_area(self):
+        """Получает рабочую область основного монитора Windows."""
+
+        SPI_GETWORKAREA = 0x0030
+
+        rect = RECT()
+
+        result = ctypes.windll.user32.SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            ctypes.byref(rect),
+            0,
+        )
+
+        if not result:
+            raise ctypes.WinError()
+
+        return rect
+
     def position_near_tray(self):
-        """Размещает панель в правом нижнем углу экрана."""
+        """Размещает панель в рабочей области Windows."""
 
         self.root.update_idletasks()
 
-        screen_width = self.root.winfo_screenwidth()
+        try:
+            work_area = self.get_work_area()
 
-        screen_height = self.root.winfo_screenheight()
+            margin_right = 10
+            margin_bottom = 10
 
-        # Небольшой отступ справа
-        margin_right = 10
+            x = work_area.right - self.window_width - margin_right
 
-        # Высота панели задач Windows 10.
-        # Пока используем безопасный запас.
-        taskbar_height = 50
+            y = work_area.bottom - self.window_height - margin_bottom
 
-        x = screen_width - self.window_width - margin_right
+        except Exception:
+            # Резервный вариант
+            screen_width = self.root.winfo_screenwidth()
 
-        y = screen_height - self.window_height - taskbar_height
+            screen_height = self.root.winfo_screenheight()
+
+            x = screen_width - self.window_width - 10
+
+            y = screen_height - self.window_height - 60
 
         self.root.geometry(f"{self.window_width}x" f"{self.window_height}" f"+{x}+{y}")
 
