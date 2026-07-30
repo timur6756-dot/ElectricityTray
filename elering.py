@@ -1,111 +1,255 @@
-import time
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
 import requests
 
+API_URL = "https://estfeed.elering.ee/" "api/public/v1/energy-price/electricity"
 
-API_URL = "https://dashboard.elering.ee/api/nps/price"
+ESTONIA_TZ = ZoneInfo("Europe/Tallinn")
 
 
-def get_prices():
-    """Получает биржевые цены от Elering."""
+def to_utc_string(dt, milliseconds="000"):
+    """
+    Преобразует datetime в UTC-строку,
+    подходящую для API Estfeed.
+    """
 
-    response = requests.get(API_URL, timeout=10)
+    utc_dt = dt.astimezone(timezone.utc)
+
+    return utc_dt.strftime(f"%Y-%m-%dT%H:%M:%S.{milliseconds}Z")
+
+
+def get_day_range(target_date):
+    """
+    Возвращает UTC-границы календарного дня
+    в часовом поясе Эстонии.
+    """
+
+    start_local = datetime(
+        target_date.year,
+        target_date.month,
+        target_date.day,
+        0,
+        0,
+        0,
+        tzinfo=ESTONIA_TZ,
+    )
+
+    end_local = start_local + timedelta(days=1) - timedelta(milliseconds=1)
+
+    start_utc = to_utc_string(
+        start_local,
+        milliseconds="000",
+    )
+
+    end_utc = to_utc_string(
+        end_local,
+        milliseconds="999",
+    )
+
+    return start_utc, end_utc
+
+
+def get_raw_day_prices(
+    target_date,
+    resolution="one_hour",
+):
+    """
+    Получает сырой ответ Estfeed
+    для выбранного дня.
+    """
+
+    start, end = get_day_range(target_date)
+
+    params = {
+        "startDateTime": start,
+        "endDateTime": end,
+        "resolution": resolution,
+    }
+
+    response = requests.get(
+        API_URL,
+        params=params,
+        timeout=10,
+    )
+
     response.raise_for_status()
 
-    data = response.json()
-
-    if not data.get("success"):
-        raise RuntimeError("Elering API returned success=False")
-
-    return data
+    return response.json()
 
 
-def get_current_estonia_price():
-    """Возвращает текущую цену электроэнергии в Эстонии."""
+def normalize_day_prices(
+    target_date,
+    resolution="one_hour",
+):
+    """
+    Преобразует сырой ответ API
+    в удобный список цен.
+    """
 
-    data = get_prices()
-    prices = data["data"]["ee"]
+    raw_data = get_raw_day_prices(
+        target_date,
+        resolution=resolution,
+    )
 
-    now = int(time.time())
+    result = []
 
-    current = None
+    for item in raw_data:
+        from_time = datetime.fromisoformat(item["fromDateTime"])
 
-    for item in prices:
-        if item["timestamp"] <= now:
-            current = item
-        else:
-            break
-
-    if current is None:
-        raise RuntimeError("Current Estonia price not found")
-
-    eur_mwh = current["price"]
-    cents_kwh = eur_mwh / 10
-
-    return {
-        "timestamp": current["timestamp"],
-        "eur_mwh": eur_mwh,
-        "cents_kwh": cents_kwh,
-    }
-
-
-def get_current_and_next_estonia_price():
-    """Возвращает текущую и следующую 15-минутную цену в Эстонии."""
-
-    data = get_prices()
-    prices = data["data"]["ee"]
-
-    now = int(time.time())
-
-    current = None
-    next_price = None
-
-    for index, item in enumerate(prices):
-        if item["timestamp"] <= now:
-            current = item
-
-            if index + 1 < len(prices):
-                next_price = prices[index + 1]
-        else:
-            break
-
-    if current is None:
-        raise RuntimeError("Current Estonia price not found")
-
-    result = {
-        "current": {
-            "timestamp": current["timestamp"],
-            "eur_mwh": current["price"],
-            "cents_kwh": current["price"] / 10,
-        },
-        "next": None,
-    }
-
-    if next_price is not None:
-        result["next"] = {
-            "timestamp": next_price["timestamp"],
-            "eur_mwh": next_price["price"],
-            "cents_kwh": next_price["price"] / 10,
-        }
+        result.append(
+            {
+                "date": target_date,
+                "time": from_time,
+                "time_text": from_time.strftime("%H:%M"),
+                "cents_kwh": item["centsPerKwh"],
+                "cents_kwh_vat": item["centsPerKwhWithVat"],
+                "eur_mwh": item["eurPerMwh"],
+                "eur_mwh_vat": item["eurPerMwhWithVat"],
+            }
+        )
 
     return result
 
 
-if __name__ == "__main__":
-    prices = get_current_and_next_estonia_price()
+def get_today_hourly_prices():
+    """
+    Возвращает почасовые цены
+    сегодняшнего дня.
+    """
 
-    print("Estonia electricity prices")
+    today = datetime.now(ESTONIA_TZ).date()
 
-    print(
-        f"Current : "
-        f"{prices['current']['eur_mwh']:.2f} EUR/MWh"
-        f" = {prices['current']['cents_kwh']:.2f} c/kWh"
+    return normalize_day_prices(
+        today,
+        resolution="one_hour",
     )
 
-    if prices["next"] is not None:
-        print(
-            f"Next    : "
-            f"{prices['next']['eur_mwh']:.2f} EUR/MWh"
-            f" = {prices['next']['cents_kwh']:.2f} c/kWh"
+
+def get_tomorrow_hourly_prices():
+    """
+    Возвращает почасовые цены
+    следующего дня.
+
+    Если цены ещё не опубликованы,
+    возвращает пустой список.
+    """
+
+    tomorrow = datetime.now(ESTONIA_TZ).date() + timedelta(days=1)
+
+    try:
+        return normalize_day_prices(
+            tomorrow,
+            resolution="one_hour",
         )
+
+    except requests.HTTPError:
+        return []
+
+
+def get_day_stats(prices):
+    """
+    Вычисляет статистику по списку цен.
+    """
+
+    if not prices:
+        return None
+
+    values = [item["cents_kwh"] for item in prices]
+
+    minimum = min(values)
+    maximum = max(values)
+    average = sum(values) / len(values)
+
+    min_item = min(
+        prices,
+        key=lambda item: item["cents_kwh"],
+    )
+
+    max_item = max(
+        prices,
+        key=lambda item: item["cents_kwh"],
+    )
+
+    return {
+        "minimum": minimum,
+        "minimum_time": min_item["time_text"],
+        "maximum": maximum,
+        "maximum_time": max_item["time_text"],
+        "average": average,
+        "intervals": len(prices),
+    }
+
+
+if __name__ == "__main__":
+    print()
+    print("TODAY")
+    print("------------------------------------")
+
+    today_prices = get_today_hourly_prices()
+
+    for item in today_prices:
+        print(
+            f"{item['time_text']}  "
+            f"{item['cents_kwh']:6.2f} c/kWh  "
+            f"{item['cents_kwh_vat']:6.2f} "
+            f"c/kWh VAT"
+        )
+
+    today_stats = get_day_stats(today_prices)
+
+    print("------------------------------------")
+
+    if today_stats:
+        print(f"Intervals: " f"{today_stats['intervals']}")
+
+        print(
+            f"Minimum: "
+            f"{today_stats['minimum']:.2f} "
+            f"c/kWh at "
+            f"{today_stats['minimum_time']}"
+        )
+
+        print(
+            f"Maximum: "
+            f"{today_stats['maximum']:.2f} "
+            f"c/kWh at "
+            f"{today_stats['maximum_time']}"
+        )
+
+        print(f"Average: " f"{today_stats['average']:.2f} " f"c/kWh")
+
+    print()
+    print("TOMORROW")
+    print("------------------------------------")
+
+    tomorrow_prices = get_tomorrow_hourly_prices()
+
+    if tomorrow_prices:
+        for item in tomorrow_prices:
+            print(f"{item['time_text']}  " f"{item['cents_kwh']:6.2f} c/kWh")
+
+        tomorrow_stats = get_day_stats(tomorrow_prices)
+
+        print("------------------------------------")
+
+        print(f"Intervals: " f"{tomorrow_stats['intervals']}")
+
+        print(
+            f"Minimum: "
+            f"{tomorrow_stats['minimum']:.2f} "
+            f"c/kWh at "
+            f"{tomorrow_stats['minimum_time']}"
+        )
+
+        print(
+            f"Maximum: "
+            f"{tomorrow_stats['maximum']:.2f} "
+            f"c/kWh at "
+            f"{tomorrow_stats['maximum_time']}"
+        )
+
+        print(f"Average: " f"{tomorrow_stats['average']:.2f} " f"c/kWh")
+
     else:
-        print("Next    : not available")
+        print("Tomorrow prices are not available yet.")
