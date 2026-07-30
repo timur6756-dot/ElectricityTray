@@ -1,6 +1,7 @@
 import ctypes
+import math
 import tkinter as tk
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import elering
 
@@ -31,8 +32,8 @@ class PricePanel:
         self.root = tk.Tk()
         self.root.title("Electricity Estonia")
 
-        self.window_width = 430
-        self.window_height = 720
+        self.window_width = 820
+        self.window_height = 680
 
         self.root.geometry(f"{self.window_width}x{self.window_height}")
 
@@ -42,7 +43,6 @@ class PricePanel:
         self.build_interface()
         self.position_near_tray()
 
-        # Фоновое обновление информации на завтра
         self.root.after(
             self.TOMORROW_REFRESH_MS,
             self.refresh_tomorrow_data,
@@ -83,12 +83,12 @@ class PricePanel:
             font=("Arial", 13, "bold"),
         )
 
-        title.pack(pady=(12, 4))
+        title.pack(pady=(8, 2))
 
         self.current_label = tk.Label(
             self.root,
             text=f"{self.current_price:.2f} c/kWh",
-            font=("Arial", 28, "bold"),
+            font=("Arial", 26, "bold"),
         )
 
         self.current_label.pack()
@@ -107,7 +107,7 @@ class PricePanel:
             font=("Arial", 9),
         )
 
-        self.interval_label.pack(pady=(6, 2))
+        self.interval_label.pack(pady=(4, 1))
 
         self.next_label = tk.Label(
             self.root,
@@ -115,19 +115,21 @@ class PricePanel:
             font=("Arial", 10),
         )
 
-        self.next_label.pack(pady=(0, 8))
+        self.next_label.pack(pady=(0, 5))
 
         self.create_separator()
 
-        # ---------- СЕГОДНЯ ----------
+        # ---------------- Сегодня ----------------
+
+        today_date = datetime.now().date()
 
         today_title = tk.Label(
             self.root,
-            text="Сегодня",
+            text=f"Сегодня — {today_date:%d.%m.%Y}",
             font=("Arial", 11, "bold"),
         )
 
-        today_title.pack(pady=(4, 2))
+        today_title.pack(pady=(2, 1))
 
         self.today_stats_label = tk.Label(
             self.root,
@@ -136,35 +138,43 @@ class PricePanel:
             justify="center",
         )
 
-        self.today_stats_label.pack(pady=(0, 6))
+        self.today_stats_label.pack(pady=(0, 3))
 
         self.today_canvas = tk.Canvas(
             self.root,
-            width=390,
-            height=180,
+            width=780,
+            height=190,
             bg="white",
             highlightthickness=1,
             highlightbackground="gray",
         )
 
-        self.today_canvas.pack(pady=(2, 8))
+        self.today_canvas.pack(pady=(1, 5))
 
         self.draw_chart(
+            self.today_canvas,
+            self.today_prices,
+            show_current_time=True,
+        )
+
+        self.enable_hover(
             self.today_canvas,
             self.today_prices,
         )
 
         self.create_separator()
 
-        # ---------- ЗАВТРА ----------
+        # ---------------- Завтра ----------------
+
+        tomorrow_date = datetime.now().date() + timedelta(days=1)
 
         tomorrow_title = tk.Label(
             self.root,
-            text="Завтра",
+            text=f"Завтра — {tomorrow_date:%d.%m.%Y}",
             font=("Arial", 11, "bold"),
         )
 
-        tomorrow_title.pack(pady=(4, 2))
+        tomorrow_title.pack(pady=(2, 1))
 
         self.tomorrow_stats_label = tk.Label(
             self.root,
@@ -173,20 +183,26 @@ class PricePanel:
             justify="center",
         )
 
-        self.tomorrow_stats_label.pack(pady=(0, 6))
+        self.tomorrow_stats_label.pack(pady=(0, 3))
 
         self.tomorrow_canvas = tk.Canvas(
             self.root,
-            width=390,
-            height=180,
+            width=780,
+            height=190,
             bg="white",
             highlightthickness=1,
             highlightbackground="gray",
         )
 
-        self.tomorrow_canvas.pack(pady=(2, 8))
+        self.tomorrow_canvas.pack(pady=(1, 4))
 
         self.draw_chart(
+            self.tomorrow_canvas,
+            self.tomorrow_prices,
+            show_current_time=False,
+        )
+
+        self.enable_hover(
             self.tomorrow_canvas,
             self.tomorrow_prices,
         )
@@ -197,7 +213,7 @@ class PricePanel:
             font=("Arial", 8),
         )
 
-        self.tomorrow_update_label.pack(pady=(0, 4))
+        self.tomorrow_update_label.pack(pady=(0, 2))
 
         close_button = tk.Button(
             self.root,
@@ -206,16 +222,24 @@ class PricePanel:
             width=12,
         )
 
-        close_button.pack(pady=(4, 8))
+        close_button.pack(pady=(2, 5))
 
     def get_interval_text(self):
         """Возвращает текущий 15-минутный интервал."""
 
         now = datetime.now()
 
-        interval_minute = (now.minute // 15) * 15
+        start_minute = (now.minute // 15) * 15
 
-        return "Текущий интервал: " f"{now.hour:02d}:" f"{interval_minute:02d}"
+        start = now.replace(
+            minute=start_minute,
+            second=0,
+            microsecond=0,
+        )
+
+        end = start + timedelta(minutes=15)
+
+        return "Текущий интервал: " f"{start:%H:%M}–{end:%H:%M}"
 
     def get_next_price_text(self):
         """Текст следующей 15-минутной цены."""
@@ -240,7 +264,8 @@ class PricePanel:
             f"Макс: "
             f"{self.today_stats['maximum']:.2f} "
             f"c/kWh в "
-            f"{self.today_stats['maximum_time']}\n"
+            f"{self.today_stats['maximum_time']}"
+            f"   |   "
             f"Средняя: "
             f"{self.today_stats['average']:.2f} "
             f"c/kWh"
@@ -258,7 +283,8 @@ class PricePanel:
             return f"Опубликовано часов: {count}"
 
         return (
-            f"Опубликовано часов: {count} из 24\n"
+            f"Опубликовано часов: {count} из 24"
+            f"   |   "
             f"Мин: "
             f"{self.tomorrow_stats['minimum']:.2f} "
             f"c/kWh в "
@@ -267,8 +293,9 @@ class PricePanel:
             f"Макс: "
             f"{self.tomorrow_stats['maximum']:.2f} "
             f"c/kWh в "
-            f"{self.tomorrow_stats['maximum_time']}\n"
-            f"Средняя опубликованных: "
+            f"{self.tomorrow_stats['maximum_time']}"
+            f"   |   "
+            f"Средняя: "
             f"{self.tomorrow_stats['average']:.2f} "
             f"c/kWh"
         )
@@ -285,39 +312,25 @@ class PricePanel:
         )
 
     def refresh_tomorrow_data(self):
-        """
-        Каждые 15 минут запрашивает
-        данные следующего дня.
-        """
-
-        old_count = len(self.tomorrow_prices)
+        """Обновляет данные на завтра."""
 
         self.load_tomorrow_data()
-
-        new_count = len(self.tomorrow_prices)
 
         self.tomorrow_stats_label.config(text=self.get_tomorrow_stats_text())
 
         self.tomorrow_update_label.config(text=self.get_update_status_text())
 
-        # График перерисовываем всегда.
-        self.tomorrow_canvas.delete("all")
-
         self.draw_chart(
+            self.tomorrow_canvas,
+            self.tomorrow_prices,
+            show_current_time=False,
+        )
+
+        self.enable_hover(
             self.tomorrow_canvas,
             self.tomorrow_prices,
         )
 
-        # Если появились новые значения,
-        # временно отражаем это в заголовке окна.
-        if new_count > old_count:
-            self.root.title(
-                f"Electricity Estonia " f"— завтра +{new_count - old_count}"
-            )
-        else:
-            self.root.title("Electricity Estonia")
-
-        # Планируем следующую проверку
         self.root.after(
             self.TOMORROW_REFRESH_MS,
             self.refresh_tomorrow_data,
@@ -335,22 +348,64 @@ class PricePanel:
         separator.pack(
             fill="x",
             padx=15,
-            pady=4,
+            pady=2,
         )
+
+    def calculate_y_scale(self, values):
+        """
+        Адаптивно рассчитывает верхнюю границу шкалы Y.
+        """
+
+        if not values:
+            return 1.0
+
+        max_value = max(values)
+
+        if max_value <= 0:
+            return 1.0
+
+        # Добавляем запас примерно 10 %
+        target = max_value * 1.10
+
+        magnitude = 10 ** math.floor(math.log10(target))
+
+        normalized = target / magnitude
+
+        if normalized <= 1:
+            nice = 1
+
+        elif normalized <= 2:
+            nice = 2
+
+        elif normalized <= 5:
+            nice = 5
+
+        else:
+            nice = 10
+
+        return nice * magnitude
 
     def draw_chart(
         self,
         canvas,
         prices,
+        show_current_time=False,
     ):
-        """Рисует график опубликованных почасовых цен."""
+        """Рисует ступенчатый график почасовых цен."""
 
         canvas.delete("all")
+
+        canvas.chart_prices = prices
+
+        chart_left = 42
+        chart_top = 16
+        chart_width = 720
+        chart_height = 135
 
         if not prices:
 
             canvas.create_text(
-                195,
+                390,
                 90,
                 text="Данных пока нет",
                 font=("Arial", 10),
@@ -360,113 +415,338 @@ class PricePanel:
 
         values = [item["cents_kwh"] for item in prices]
 
-        max_value = max(values)
+        y_max = self.calculate_y_scale(values)
 
-        if max_value <= 0:
-            max_value = 1
+        canvas.chart_geometry = {
+            "left": chart_left,
+            "top": chart_top,
+            "width": chart_width,
+            "height": chart_height,
+            "y_max": y_max,
+        }
 
-        chart_left = 30
-        chart_top = 15
-        chart_width = 340
-        chart_height = 130
+        # Вертикальная сетка 00–24
+        for hour in range(25):
+
+            x = chart_left + (hour / 24) * chart_width
+
+            canvas.create_line(
+                x,
+                chart_top,
+                x,
+                chart_top + chart_height,
+                fill="#dddddd",
+                dash=(2, 2),
+            )
+
+            canvas.create_text(
+                x,
+                chart_top + chart_height + 16,
+                text=f"{hour:02d}",
+                font=("Arial", 7),
+            )
+
+        # Горизонтальная сетка
+        y_steps = 4
+
+        for step in range(y_steps + 1):
+
+            value = y_max * step / y_steps
+
+            y = chart_top + chart_height - (value / y_max) * chart_height
+
+            canvas.create_line(
+                chart_left,
+                y,
+                chart_left + chart_width,
+                y,
+                fill="#eeeeee",
+            )
+
+            canvas.create_text(
+                5,
+                y,
+                text=f"{value:.1f}",
+                anchor="w",
+                font=("Arial", 8),
+            )
 
         # Оси
+        canvas.create_line(
+            chart_left,
+            chart_top,
+            chart_left,
+            chart_top + chart_height,
+            width=1,
+        )
 
         canvas.create_line(
             chart_left,
             chart_top + chart_height,
             chart_left + chart_width,
             chart_top + chart_height,
+            width=1,
         )
 
-        canvas.create_line(
-            chart_left,
-            chart_top,
-            chart_left,
-            chart_top + chart_height,
+        # Подпись Y
+        canvas.create_text(
+            6,
+            5,
+            text="c/kWh",
+            anchor="w",
+            font=("Arial", 8),
         )
 
-        count = len(values)
+        # Ступенчатый график
+        points = []
 
-        # Один опубликованный час —
-        # показываем отдельной точкой
-        if count == 1:
+        for item in prices:
 
-            x = chart_left
+            hour = item["time"].hour
+            value = item["cents_kwh"]
 
-            y = chart_top + chart_height - (values[0] / max_value) * chart_height
+            x_start = chart_left + (hour / 24) * chart_width
 
-            canvas.create_oval(
-                x - 3,
-                y - 3,
-                x + 3,
-                y + 3,
-                fill="black",
-            )
+            x_end = chart_left + ((hour + 1) / 24) * chart_width
 
-        else:
+            y = chart_top + chart_height - (value / y_max) * chart_height
 
-            points = []
-
-            # Используем положение часа
-            # на полной 24-часовой шкале,
-            # а не растягиваем неполные данные.
-            for item in prices:
-
-                hour = item["time"].hour
-                value = item["cents_kwh"]
-
-                x = chart_left + (hour / 23) * chart_width
-
-                y = chart_top + chart_height - (value / max_value) * chart_height
-
+            if not points:
                 points.extend(
                     [
-                        x,
+                        x_start,
                         y,
                     ]
                 )
 
+            points.extend(
+                [
+                    x_end,
+                    y,
+                ]
+            )
+
+            next_hour = hour + 1
+
+            next_item = None
+
+            for candidate in prices:
+                if candidate["time"].hour == next_hour:
+                    next_item = candidate
+                    break
+
+            if next_item is not None:
+
+                next_y = (
+                    chart_top
+                    + chart_height
+                    - (next_item["cents_kwh"] / y_max) * chart_height
+                )
+
+                points.extend(
+                    [
+                        x_end,
+                        next_y,
+                    ]
+                )
+
+        if len(points) >= 4:
             canvas.create_line(
                 points,
                 width=2,
-                smooth=True,
             )
 
-        # Шкала времени всегда полные сутки
+        # Текущее время
+        if show_current_time:
 
-        for hour in [
-            0,
-            6,
-            12,
-            18,
-            23,
-        ]:
+            now = datetime.now()
 
-            x = chart_left + (hour / 23) * chart_width
+            seconds_today = now.hour * 3600 + now.minute * 60 + now.second
+
+            day_fraction = seconds_today / (24 * 3600)
+
+            current_x = chart_left + day_fraction * chart_width
+
+            canvas.create_line(
+                current_x,
+                chart_top,
+                current_x,
+                chart_top + chart_height,
+                width=2,
+                dash=(4, 3),
+            )
 
             canvas.create_text(
-                x,
-                chart_top + chart_height + 15,
-                text=f"{hour:02d}",
-                font=("Arial", 8),
+                current_x,
+                chart_top + 5,
+                text=f"{now:%H:%M}",
+                anchor="n",
+                font=("Arial", 8, "bold"),
             )
 
-        canvas.create_text(
-            5,
-            chart_top,
-            text=f"{max_value:.1f}",
-            anchor="w",
-            font=("Arial", 8),
+    def enable_hover(
+        self,
+        canvas,
+        prices,
+    ):
+        """Подключает всплывающую подсказку над графиком."""
+
+        canvas.chart_prices = prices
+
+        canvas.bind(
+            "<Motion>",
+            lambda event: self.on_chart_motion(
+                event,
+                canvas,
+            ),
         )
 
-        canvas.create_text(
-            5,
-            chart_top + chart_height,
-            text="0",
-            anchor="w",
-            font=("Arial", 8),
+        canvas.bind(
+            "<Leave>",
+            lambda event: self.hide_chart_tooltip(canvas),
         )
+
+    def on_chart_motion(
+        self,
+        event,
+        canvas,
+    ):
+        """Обрабатывает движение мыши по графику."""
+
+        if not hasattr(
+            canvas,
+            "chart_geometry",
+        ):
+            return
+
+        geometry = canvas.chart_geometry
+
+        chart_left = geometry["left"]
+
+        chart_width = geometry["width"]
+
+        chart_top = geometry["top"]
+
+        chart_height = geometry["height"]
+
+        x = event.x
+
+        if x < chart_left or x > chart_left + chart_width:
+            self.hide_chart_tooltip(canvas)
+            return
+
+        fraction = (x - chart_left) / chart_width
+
+        hour = int(fraction * 24)
+
+        hour = max(
+            0,
+            min(
+                23,
+                hour,
+            ),
+        )
+
+        item = None
+
+        for price_item in canvas.chart_prices:
+            if price_item["time"].hour == hour:
+                item = price_item
+                break
+
+        if item is None:
+            self.hide_chart_tooltip(canvas)
+            return
+
+        value = item["cents_kwh"]
+
+        vat_value = item.get("cents_kwh_vat")
+
+        y_max = geometry["y_max"]
+
+        item_y = chart_top + chart_height - (value / y_max) * chart_height
+
+        hour_x = chart_left + ((hour + 0.5) / 24) * chart_width
+
+        canvas.delete("hover")
+
+        # Вертикальная линия выбранного часа
+        canvas.create_line(
+            hour_x,
+            chart_top,
+            hour_x,
+            chart_top + chart_height,
+            fill="#777777",
+            dash=(2, 2),
+            tags="hover",
+        )
+
+        # Точка цены
+        canvas.create_oval(
+            hour_x - 4,
+            item_y - 4,
+            hour_x + 4,
+            item_y + 4,
+            fill="black",
+            tags="hover",
+        )
+
+        end_hour = hour + 1
+
+        tooltip_text = f"{hour:02d}:00–" f"{end_hour:02d}:00\n" f"{value:.3f} c/kWh"
+
+        if vat_value is not None:
+            tooltip_text += f"\nс НДС: " f"{vat_value:.3f} c/kWh"
+
+        tooltip_x = event.x + 12
+
+        tooltip_y = event.y - 12
+
+        # Не даём tooltip выйти вправо
+        if tooltip_x > 610:
+            tooltip_x = event.x - 150
+
+        # Не даём выйти вверх
+        if tooltip_y < 30:
+            tooltip_y = event.y + 20
+
+        text_id = canvas.create_text(
+            tooltip_x,
+            tooltip_y,
+            text=tooltip_text,
+            anchor="nw",
+            font=("Arial", 9, "bold"),
+            tags="hover",
+        )
+
+        bbox = canvas.bbox(text_id)
+
+        if bbox:
+
+            padding = 5
+
+            rect_id = canvas.create_rectangle(
+                bbox[0] - padding,
+                bbox[1] - padding,
+                bbox[2] + padding,
+                bbox[3] + padding,
+                fill="white",
+                outline="black",
+                tags="hover",
+            )
+
+            canvas.tag_lower(
+                rect_id,
+                text_id,
+            )
+
+    def hide_chart_tooltip(
+        self,
+        canvas,
+    ):
+        """Удаляет hover-подсказку."""
+
+        canvas.delete("hover")
 
     def get_work_area(self):
         """Получает рабочую область Windows."""
@@ -488,7 +768,7 @@ class PricePanel:
         return rect
 
     def position_near_tray(self):
-        """Размещает окно над панелью задач."""
+        """Размещает окно над taskbar."""
 
         self.root.update_idletasks()
 
@@ -498,10 +778,14 @@ class PricePanel:
 
             x = work_area.right - self.window_width - 10
 
-            y = work_area.bottom - self.window_height - 10
+            # Чуть больший запас снизу,
+            # чтобы нижняя шкала точно была видна.
+            margin_bottom = 18
+
+            y = work_area.bottom - self.window_height - margin_bottom
 
             if y < work_area.top:
-                y = work_area.top + 10
+                y = work_area.top + 5
 
         except Exception:
 
@@ -512,8 +796,8 @@ class PricePanel:
             x = screen_width - self.window_width - 10
 
             y = max(
-                10,
-                screen_height - self.window_height - 60,
+                5,
+                screen_height - self.window_height - 80,
             )
 
         self.root.geometry(f"{self.window_width}x" f"{self.window_height}" f"+{x}+{y}")
