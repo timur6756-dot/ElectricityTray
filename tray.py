@@ -21,9 +21,13 @@ class TrayIcon:
         else:
             self.next_price = None
 
-        # Сколько данных на завтра
+        # Сколько почасовых значений на завтра
         # было известно при последней проверке.
         self.tomorrow_count = 0
+
+        # Дата, для которой сейчас ведётся
+        # мониторинг следующего дня.
+        self.tomorrow_monitor_date = datetime.now().date()
 
         try:
             tomorrow = elering.get_tomorrow_hourly_prices()
@@ -59,7 +63,7 @@ class TrayIcon:
         self,
         price,
     ):
-        """Цвет молнии по текущей цене."""
+        """Возвращает цвет молнии по текущей цене."""
 
         if price < config.PRICE_CHEAP:
             return "green"
@@ -76,7 +80,7 @@ class TrayIcon:
         self,
         price,
     ):
-        """Цена сверху, молния снизу."""
+        """Создаёт иконку: цена сверху, молния снизу."""
 
         image = Image.new(
             "RGB",
@@ -132,7 +136,7 @@ class TrayIcon:
         return image
 
     def create_tooltip(self):
-        """Подсказка tray."""
+        """Создаёт текст подсказки tray."""
 
         lines = [
             "Nord Pool Estonia",
@@ -144,13 +148,14 @@ class TrayIcon:
 
         if self.tomorrow_count > 0:
             lines.append("Завтра опубликовано: " f"{self.tomorrow_count}/24 ч")
+
         else:
             lines.append("Завтра: данных пока нет")
 
         return "\n".join(lines)
 
     def update_prices(self):
-        """Обновляет текущие 15-минутные цены."""
+        """Обновляет текущую и следующую 15-минутную цену."""
 
         prices = elering.get_current_and_next_estonia_price()
 
@@ -158,6 +163,7 @@ class TrayIcon:
 
         if prices["next"] is not None:
             self.next_price = prices["next"]["cents_kwh"]
+
         else:
             self.next_price = None
 
@@ -166,7 +172,7 @@ class TrayIcon:
         self.icon.title = self.create_tooltip()
 
     def update_tomorrow_prices(self):
-        """Проверяет появление новых данных на завтра."""
+        """Проверяет появление новых почасовых цен на завтра."""
 
         tomorrow = elering.get_tomorrow_hourly_prices()
 
@@ -178,9 +184,8 @@ class TrayIcon:
 
         self.icon.title = self.create_tooltip()
 
-        # Windows notification от pystray
-        # используем только если реально
-        # появились новые значения.
+        # Уведомляем только тогда,
+        # когда реально появились новые значения.
         if new_count > old_count:
 
             try:
@@ -190,6 +195,8 @@ class TrayIcon:
                 )
 
             except Exception:
+                # Если системное уведомление
+                # недоступно, приложение продолжает работу.
                 pass
 
     def open_panel(
@@ -207,7 +214,7 @@ class TrayIcon:
         panel_thread.start()
 
     def run_panel(self):
-        """Запускает PricePanel."""
+        """Создаёт и запускает PricePanel."""
 
         panel = PricePanel(
             current_price=self.price,
@@ -221,7 +228,7 @@ class TrayIcon:
         icon,
         item,
     ):
-        """Ручное обновление всего."""
+        """Ручное обновление всех данных."""
 
         try:
             self.update_prices()
@@ -232,7 +239,7 @@ class TrayIcon:
 
     def current_price_loop(self):
         """
-        Текущая цена обновляется
+        Автоматически обновляет текущую цену
         на границах 15-минутных интервалов.
         """
 
@@ -257,23 +264,45 @@ class TrayIcon:
 
     def tomorrow_price_loop(self):
         """
-        Фоновая проверка завтрашних цен
-        каждые 15 минут.
+        Проверяет цены на завтра каждые 15 минут,
+        пока не опубликован полный день.
+
+        После получения 24 часов лишние запросы
+        прекращаются до смены календарной даты.
         """
 
         while self.running:
 
-            # 15 минут
             time.sleep(15 * 60)
 
             if not self.running:
                 break
 
+            today = datetime.now().date()
+
+            # Наступили новые сутки.
+            # Вчерашнее "завтра" стало сегодняшним,
+            # поэтому начинаем мониторинг заново.
+            if today != self.tomorrow_monitor_date:
+                self.tomorrow_monitor_date = today
+
+                self.tomorrow_count = 0
+
+                # Обновляем tooltip,
+                # чтобы старое 24/24 исчезло.
+                self.icon.title = self.create_tooltip()
+
+            # Если полный следующий день
+            # уже опубликован, API больше
+            # не опрашиваем до смены даты.
+            if self.tomorrow_count >= 24:
+                continue
+
             try:
                 self.update_tomorrow_prices()
 
             except Exception:
-                # Ошибка сети не должна
+                # Ошибки сети не должны
                 # останавливать приложение.
                 pass
 
@@ -288,7 +317,7 @@ class TrayIcon:
         icon.stop()
 
     def run(self):
-        """Запускает фоновые потоки и tray."""
+        """Запускает фоновые процессы и системный tray."""
 
         current_thread = threading.Thread(
             target=self.current_price_loop,
