@@ -9,10 +9,7 @@ ESTONIA_TZ = ZoneInfo("Europe/Tallinn")
 
 
 def to_utc_string(dt, milliseconds="000"):
-    """
-    Преобразует datetime в UTC-строку,
-    подходящую для API Estfeed.
-    """
+    """Преобразует datetime в UTC-строку для API Estfeed."""
 
     utc_dt = dt.astimezone(timezone.utc)
 
@@ -20,10 +17,7 @@ def to_utc_string(dt, milliseconds="000"):
 
 
 def get_day_range(target_date):
-    """
-    Возвращает UTC-границы календарного дня
-    в часовом поясе Эстонии.
-    """
+    """Возвращает UTC-границы календарного дня в Эстонии."""
 
     start_local = datetime(
         target_date.year,
@@ -37,27 +31,47 @@ def get_day_range(target_date):
 
     end_local = start_local + timedelta(days=1) - timedelta(milliseconds=1)
 
-    start_utc = to_utc_string(
-        start_local,
-        milliseconds="000",
+    return (
+        to_utc_string(start_local, "000"),
+        to_utc_string(end_local, "999"),
     )
 
-    end_utc = to_utc_string(
-        end_local,
-        milliseconds="999",
+
+def get_raw_prices(
+    start_datetime,
+    end_datetime,
+    resolution,
+):
+    """Выполняет запрос к Estfeed API."""
+
+    params = {
+        "startDateTime": to_utc_string(
+            start_datetime,
+            "000",
+        ),
+        "endDateTime": to_utc_string(
+            end_datetime,
+            "999",
+        ),
+        "resolution": resolution,
+    }
+
+    response = requests.get(
+        API_URL,
+        params=params,
+        timeout=10,
     )
 
-    return start_utc, end_utc
+    response.raise_for_status()
+
+    return response.json()
 
 
 def get_raw_day_prices(
     target_date,
     resolution="one_hour",
 ):
-    """
-    Получает сырой ответ Estfeed
-    для выбранного дня.
-    """
+    """Получает цены выбранного календарного дня."""
 
     start, end = get_day_range(target_date)
 
@@ -82,14 +96,11 @@ def normalize_day_prices(
     target_date,
     resolution="one_hour",
 ):
-    """
-    Преобразует сырой ответ API
-    в удобный список цен.
-    """
+    """Преобразует ответ API в удобный список."""
 
     raw_data = get_raw_day_prices(
         target_date,
-        resolution=resolution,
+        resolution,
     )
 
     result = []
@@ -112,11 +123,67 @@ def normalize_day_prices(
     return result
 
 
+def get_current_and_next_estonia_price():
+    """
+    Возвращает настоящую текущую
+    и следующую 15-минутную цену.
+    """
+
+    now = datetime.now(ESTONIA_TZ)
+
+    # Берём диапазон вокруг текущего момента
+    start = now - timedelta(minutes=30)
+    end = now + timedelta(minutes=45)
+
+    data = get_raw_prices(
+        start,
+        end,
+        resolution="fifteen_minutes",
+    )
+
+    current_item = None
+    next_item = None
+
+    for index, item in enumerate(data):
+
+        item_start = datetime.fromisoformat(item["fromDateTime"])
+
+        item_end = datetime.fromisoformat(item["toDateTime"])
+
+        if item_start <= now <= item_end:
+            current_item = item
+
+            if index + 1 < len(data):
+                next_item = data[index + 1]
+
+            break
+
+    if current_item is None:
+        raise RuntimeError("Current Estonia price not found")
+
+    result = {
+        "current": {
+            "timestamp": current_item["fromDateTime"],
+            "eur_mwh": current_item["eurPerMwh"],
+            "cents_kwh": current_item["centsPerKwh"],
+            "cents_kwh_vat": current_item["centsPerKwhWithVat"],
+        },
+        "next": None,
+    }
+
+    if next_item is not None:
+        result["next"] = {
+            "timestamp": next_item["fromDateTime"],
+            "eur_mwh": next_item["eurPerMwh"],
+            "cents_kwh": next_item["centsPerKwh"],
+            "cents_kwh_vat": next_item["centsPerKwhWithVat"],
+        }
+
+    return result
+
+
 def get_today_hourly_prices():
-    """
-    Возвращает почасовые цены
-    сегодняшнего дня.
-    """
+    """Почасовые цены сегодняшнего дня."""
 
     today = datetime.now(ESTONIA_TZ).date()
 
@@ -127,13 +194,7 @@ def get_today_hourly_prices():
 
 
 def get_tomorrow_hourly_prices():
-    """
-    Возвращает почасовые цены
-    следующего дня.
-
-    Если цены ещё не опубликованы,
-    возвращает пустой список.
-    """
+    """Почасовые цены следующего дня."""
 
     tomorrow = datetime.now(ESTONIA_TZ).date() + timedelta(days=1)
 
@@ -148,18 +209,12 @@ def get_tomorrow_hourly_prices():
 
 
 def get_day_stats(prices):
-    """
-    Вычисляет статистику по списку цен.
-    """
+    """Статистика по суточному списку цен."""
 
     if not prices:
         return None
 
     values = [item["cents_kwh"] for item in prices]
-
-    minimum = min(values)
-    maximum = max(values)
-    average = sum(values) / len(values)
 
     min_item = min(
         prices,
@@ -172,84 +227,58 @@ def get_day_stats(prices):
     )
 
     return {
-        "minimum": minimum,
+        "minimum": min(values),
         "minimum_time": min_item["time_text"],
-        "maximum": maximum,
+        "maximum": max(values),
         "maximum_time": max_item["time_text"],
-        "average": average,
+        "average": sum(values) / len(values),
         "intervals": len(prices),
     }
 
 
 if __name__ == "__main__":
-    print()
-    print("TODAY")
-    print("------------------------------------")
-
-    today_prices = get_today_hourly_prices()
-
-    for item in today_prices:
-        print(
-            f"{item['time_text']}  "
-            f"{item['cents_kwh']:6.2f} c/kWh  "
-            f"{item['cents_kwh_vat']:6.2f} "
-            f"c/kWh VAT"
-        )
-
-    today_stats = get_day_stats(today_prices)
-
-    print("------------------------------------")
-
-    if today_stats:
-        print(f"Intervals: " f"{today_stats['intervals']}")
-
-        print(
-            f"Minimum: "
-            f"{today_stats['minimum']:.2f} "
-            f"c/kWh at "
-            f"{today_stats['minimum_time']}"
-        )
-
-        print(
-            f"Maximum: "
-            f"{today_stats['maximum']:.2f} "
-            f"c/kWh at "
-            f"{today_stats['maximum_time']}"
-        )
-
-        print(f"Average: " f"{today_stats['average']:.2f} " f"c/kWh")
 
     print()
-    print("TOMORROW")
+    print("CURRENT 15-MINUTE PRICES")
     print("------------------------------------")
 
-    tomorrow_prices = get_tomorrow_hourly_prices()
+    prices = get_current_and_next_estonia_price()
 
-    if tomorrow_prices:
-        for item in tomorrow_prices:
-            print(f"{item['time_text']}  " f"{item['cents_kwh']:6.2f} c/kWh")
+    print(
+        "Current:",
+        f"{prices['current']['cents_kwh']:.3f}",
+        "c/kWh",
+    )
 
-        tomorrow_stats = get_day_stats(tomorrow_prices)
-
-        print("------------------------------------")
-
-        print(f"Intervals: " f"{tomorrow_stats['intervals']}")
-
+    if prices["next"]:
         print(
-            f"Minimum: "
-            f"{tomorrow_stats['minimum']:.2f} "
-            f"c/kWh at "
-            f"{tomorrow_stats['minimum_time']}"
+            "Next:",
+            f"{prices['next']['cents_kwh']:.3f}",
+            "c/kWh",
         )
 
-        print(
-            f"Maximum: "
-            f"{tomorrow_stats['maximum']:.2f} "
-            f"c/kWh at "
-            f"{tomorrow_stats['maximum_time']}"
-        )
+    print()
+    print("TODAY HOURLY")
+    print("------------------------------------")
 
-        print(f"Average: " f"{tomorrow_stats['average']:.2f} " f"c/kWh")
+    today = get_today_hourly_prices()
 
-    else:
-        print("Tomorrow prices are not available yet.")
+    stats = get_day_stats(today)
+
+    print("Intervals:", stats["intervals"])
+    print(
+        "Minimum:",
+        f"{stats['minimum']:.2f}",
+        "at",
+        stats["minimum_time"],
+    )
+    print(
+        "Maximum:",
+        f"{stats['maximum']:.2f}",
+        "at",
+        stats["maximum_time"],
+    )
+    print(
+        "Average:",
+        f"{stats['average']:.2f}",
+    )
