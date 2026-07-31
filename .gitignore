@@ -6,6 +6,11 @@ __pycache__/
 *.pyc
 *.pyo
 
+# PyInstaller
+build/
+dist/
+*.spec
+
 # VS Code
 .vscode/
 
@@ -15,3 +20,9 @@ data/
 # Windows
 Thumbs.db
 Desktop.ini
+
+# User settings
+settings.json
+
+# Archives
+*.zip
