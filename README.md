@@ -200,4 +200,6 @@ Currently supported:
 
 ## License
 
-A project license has not yet been selected.
+This project is licensed under the MIT License.
+
+See the `LICENSE` file for details.
