@@ -26,3 +26,6 @@ settings.json
 
 # Archives
 *.zip
+
+# Generated version metadata
+version_info.txt
