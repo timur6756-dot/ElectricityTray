@@ -21,6 +21,10 @@ The application retrieves electricity price data from **Elering Estfeed** and di
 - 💾 Persistent user settings
 - 🌐 Multilingual interface
 
+## Screenshot
+
+![ElectricityTray interface](docs/screenshot.PNG)
+
 ## Languages
 
 ElectricityTray currently supports:
@@ -141,6 +145,9 @@ ElectricityTray/
 │   ├── ElectricityTray.ico
 │   └── ElectricityTray.png
 │
+├── docs/
+│   └── screenshot.PNG
+│
 ├── main.py
 ├── tray.py
 ├── panel.py
@@ -152,6 +159,7 @@ ElectricityTray/
 ├── version.txt
 ├── build.ps1
 ├── README.md
+├── LICENS
 └── .gitignore
 ```
 
