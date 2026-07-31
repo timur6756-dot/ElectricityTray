@@ -18,8 +18,6 @@ class RECT(ctypes.Structure):
 
 class PricePanel:
 
-    TOMORROW_REFRESH_MS = 15 * 60 * 1000
-
     def __init__(self, current_price, next_price):
         self.current_price = current_price
         self.next_price = next_price
@@ -36,33 +34,34 @@ class PricePanel:
         self.root.title("Electricity Estonia")
 
         self.window_width = 980
-
-        # Высота обычного режима
         self.compact_height = 690
-
-        # Желаемая высота режима с таблицей.
-        # Фактическая высота будет ограничена
-        # рабочей областью Windows.
         self.expanded_height = 920
-
         self.window_height = self.compact_height
 
-        self.root.resizable(
-            False,
-            False,
-        )
+        self.root.resizable(False, False)
 
-        self.load_data()
+        self.load_all_data()
         self.build_interface()
         self.position_near_tray()
 
-        self.root.after(
-            self.TOMORROW_REFRESH_MS,
-            self.refresh_tomorrow_data,
-        )
+        # Запускаем единый цикл обновления.
+        self.schedule_next_market_update()
 
-    def load_data(self):
-        """Загружает данные за сегодня и завтра."""
+    def load_all_data(self):
+        """Первичная загрузка всех данных."""
+
+        try:
+            current = elering.get_current_and_next_estonia_price()
+
+            self.current_price = current["current"]["cents_kwh"]
+
+            if current["next"] is not None:
+                self.next_price = current["next"]["cents_kwh"]
+            else:
+                self.next_price = None
+
+        except Exception:
+            pass
 
         try:
             self.today_prices = elering.get_today_hourly_prices()
@@ -70,13 +69,12 @@ class PricePanel:
             self.today_stats = elering.get_day_stats(self.today_prices)
 
         except Exception:
-            self.today_prices = []
-            self.today_stats = None
+            pass
 
         self.load_tomorrow_data()
 
     def load_tomorrow_data(self):
-        """Получает все доступные данные на завтра."""
+        """Получает доступные цены следующего дня."""
 
         try:
             self.tomorrow_prices = elering.get_tomorrow_hourly_prices()
@@ -84,8 +82,8 @@ class PricePanel:
             self.tomorrow_stats = elering.get_day_stats(self.tomorrow_prices)
 
         except Exception:
-            self.tomorrow_prices = []
-            self.tomorrow_stats = None
+            # Старые данные сохраняем.
+            pass
 
     def build_interface(self):
         """Создаёт основной интерфейс."""
@@ -105,7 +103,6 @@ class PricePanel:
 
         title.pack()
 
-        # Кнопка таблицы
         self.table_button = tk.Button(
             self.root,
             text="Показать таблицу",
@@ -118,7 +115,8 @@ class PricePanel:
             y=12,
         )
 
-        # Текущая цена
+        # ---------- Текущая цена ----------
+
         self.current_label = tk.Label(
             self.root,
             text=(f"{self.current_price:.2f} " f"c/kWh"),
@@ -151,17 +149,15 @@ class PricePanel:
 
         self.create_separator()
 
-        # ======================================
-        # СЕГОДНЯ
-        # ======================================
+        # ---------- Сегодня ----------
 
-        today_date = datetime.now().date()
-
-        tk.Label(
+        self.today_title_label = tk.Label(
             self.root,
-            text=(f"Сегодня — " f"{today_date:%d.%m.%Y}"),
+            text=self.get_today_title(),
             font=("Arial", 11, "bold"),
-        ).pack(pady=(2, 1))
+        )
+
+        self.today_title_label.pack(pady=(2, 1))
 
         self.today_stats_label = tk.Label(
             self.root,
@@ -195,17 +191,15 @@ class PricePanel:
 
         self.create_separator()
 
-        # ======================================
-        # ЗАВТРА
-        # ======================================
+        # ---------- Завтра ----------
 
-        tomorrow_date = today_date + timedelta(days=1)
-
-        tk.Label(
+        self.tomorrow_title_label = tk.Label(
             self.root,
-            text=(f"Завтра — " f"{tomorrow_date:%d.%m.%Y}"),
+            text=self.get_tomorrow_title(),
             font=("Arial", 11, "bold"),
-        ).pack(pady=(2, 1))
+        )
+
+        self.tomorrow_title_label.pack(pady=(2, 1))
 
         self.tomorrow_stats_label = tk.Label(
             self.root,
@@ -237,21 +231,16 @@ class PricePanel:
             self.tomorrow_prices,
         )
 
-        # Информация об обновлении
-        self.tomorrow_update_label = tk.Label(
+        self.update_status_label = tk.Label(
             self.root,
-            text=(self.get_update_status_text()),
+            text=self.get_update_status_text(),
             font=("Arial", 8),
         )
 
-        self.tomorrow_update_label.pack(pady=(0, 3))
+        self.update_status_label.pack(pady=(0, 3))
 
-        # Контейнер таблиц.
-        # Изначально скрыт.
+        # Таблица изначально скрыта.
         self.table_frame = tk.Frame(self.root)
-
-        # Отдельной кнопки "Закрыть" больше нет.
-        # Используем стандартный X окна Windows.
 
     def create_separator(self):
         """Горизонтальный разделитель."""
@@ -268,8 +257,22 @@ class PricePanel:
             pady=2,
         )
 
+    def get_today_title(self):
+        """Заголовок сегодняшнего дня."""
+
+        today = datetime.now().date()
+
+        return f"Сегодня — " f"{today:%d.%m.%Y}"
+
+    def get_tomorrow_title(self):
+        """Заголовок следующего дня."""
+
+        tomorrow = datetime.now().date() + timedelta(days=1)
+
+        return f"Завтра — " f"{tomorrow:%d.%m.%Y}"
+
     def get_interval_text(self):
-        """Текущий 15-минутный интервал."""
+        """Возвращает текущий 15-минутный интервал."""
 
         now = datetime.now()
 
@@ -286,7 +289,7 @@ class PricePanel:
         return "Текущий интервал: " f"{start:%H:%M}–" f"{end:%H:%M}"
 
     def get_next_price_text(self):
-        """Цена следующего интервала."""
+        """Текст следующей цены."""
 
         if self.next_price is None:
             return "Следующая цена недоступна"
@@ -316,7 +319,7 @@ class PricePanel:
         )
 
     def get_tomorrow_stats_text(self):
-        """Статистика доступных данных завтра."""
+        """Статистика опубликованных данных завтра."""
 
         count = len(self.tomorrow_prices)
 
@@ -349,15 +352,15 @@ class PricePanel:
         )
 
     def get_update_status_text(self):
-        """Время последней проверки завтра."""
+        """Строка времени последнего обновления."""
 
         now = datetime.now()
 
         return (
-            "Последняя проверка завтра: "
+            "Последнее обновление: "
             f"{now:%H:%M:%S}"
             "   ·   "
-            "обновление каждые 15 мин"
+            "следующее на границе 15 мин"
         )
 
     def calculate_y_scale(
@@ -374,7 +377,6 @@ class PricePanel:
         if max_value <= 0:
             return 1.0
 
-        # Запас сверху
         target = max_value * 1.10
 
         magnitude = 10 ** math.floor(math.log10(target))
@@ -401,7 +403,7 @@ class PricePanel:
         prices,
         show_current_time=False,
     ):
-        """Рисует 15-минутную столбчатую диаграмму."""
+        """Рисует 96 15-минутных интервалов."""
 
         canvas.delete("all")
 
@@ -434,7 +436,7 @@ class PricePanel:
             "y_max": y_max,
         }
 
-        # Вертикальная сетка по часам
+        # Вертикальная сетка каждый час.
         for hour in range(25):
 
             x = chart_left + (hour / 24) * chart_width
@@ -455,7 +457,7 @@ class PricePanel:
                 font=("Arial", 7),
             )
 
-        # Горизонтальная сетка
+        # Горизонтальная сетка.
         y_steps = 4
 
         for step in range(y_steps + 1):
@@ -488,7 +490,6 @@ class PricePanel:
             font=("Arial", 8),
         )
 
-        # 96 интервалов в сутках
         bar_width = chart_width / 96
 
         for item in prices:
@@ -516,7 +517,6 @@ class PricePanel:
                 outline="#188cca",
             )
 
-        # Маркер текущего времени
         if show_current_time:
 
             now = datetime.now()
@@ -554,7 +554,7 @@ class PricePanel:
         canvas,
         prices,
     ):
-        """Включает hover по графику."""
+        """Включает hover-подсказку."""
 
         canvas.chart_prices = prices
 
@@ -578,7 +578,7 @@ class PricePanel:
         event,
         canvas,
     ):
-        """Показывает цену под указателем мыши."""
+        """Показывает цену конкретного интервала."""
 
         if not hasattr(
             canvas,
@@ -638,7 +638,6 @@ class PricePanel:
 
         canvas.delete("hover")
 
-        # Точка выбранной цены
         canvas.create_oval(
             center_x - 4,
             point_y - 4,
@@ -651,7 +650,6 @@ class PricePanel:
         tooltip = f"{item['interval_text']}\n" f"{value:.3f} c/kWh"
 
         if vat_value is not None:
-
             tooltip += "\nс НДС: " f"{vat_value:.3f} " "c/kWh"
 
         tx = event.x + 12
@@ -726,12 +724,10 @@ class PricePanel:
 
             self.window_height = self.expanded_height
 
-        # position_near_tray сам ограничит
-        # высоту рабочей областью Windows.
         self.position_near_tray()
 
     def build_table(self):
-        """Создаёт таблицы сегодня/завтра."""
+        """Строит таблицы сегодня и завтра."""
 
         for child in self.table_frame.winfo_children():
             child.destroy()
@@ -761,13 +757,13 @@ class PricePanel:
             padx=(5, 0),
         )
 
-        today_date = datetime.now().date()
+        today = datetime.now().date()
 
-        tomorrow_date = today_date + timedelta(days=1)
+        tomorrow = today + timedelta(days=1)
 
         self.create_price_table(
             left_frame,
-            (f"Сегодня — " f"{today_date:%d.%m.%Y}"),
+            (f"Сегодня — " f"{today:%d.%m.%Y}"),
             self.today_prices,
         )
 
@@ -775,7 +771,7 @@ class PricePanel:
             right_frame,
             (
                 f"Завтра — "
-                f"{tomorrow_date:%d.%m.%Y} "
+                f"{tomorrow:%d.%m.%Y} "
                 f"("
                 f"{len(self.tomorrow_prices)}"
                 f" из 96)"
@@ -789,7 +785,7 @@ class PricePanel:
         title,
         prices,
     ):
-        """Создаёт таблицу одного дня."""
+        """Создаёт таблицу цен."""
 
         tk.Label(
             parent,
@@ -853,7 +849,7 @@ class PricePanel:
             command=tree.yview,
         )
 
-        tree.configure(yscrollcommand=(scrollbar.set))
+        tree.configure(yscrollcommand=scrollbar.set)
 
         tree.pack(
             side="left",
@@ -890,20 +886,77 @@ class PricePanel:
                 tags=(tag,),
             )
 
-        # Текущий интервал
         tree.tag_configure(
             "current",
             background="#fff4a8",
         )
 
-    def refresh_tomorrow_data(self):
-        """Периодическое обновление завтра."""
+    def refresh_all_data(self):
+        """
+        Обновляет всю открытую панель.
+
+        При ошибке API уже показанные
+        данные сохраняются.
+        """
+
+        try:
+
+            current = elering.get_current_and_next_estonia_price()
+
+            self.current_price = current["current"]["cents_kwh"]
+
+            if current["next"] is not None:
+                self.next_price = current["next"]["cents_kwh"]
+            else:
+                self.next_price = None
+
+        except Exception:
+            pass
+
+        try:
+
+            new_today = elering.get_today_hourly_prices()
+
+            if new_today:
+                self.today_prices = new_today
+
+                self.today_stats = elering.get_day_stats(self.today_prices)
+
+        except Exception:
+            pass
 
         self.load_tomorrow_data()
 
-        self.tomorrow_stats_label.config(text=(self.get_tomorrow_stats_text()))
+        # ---------- Обновление текста ----------
 
-        self.tomorrow_update_label.config(text=(self.get_update_status_text()))
+        self.current_label.config(text=(f"{self.current_price:.2f} " f"c/kWh"))
+
+        self.interval_label.config(text=self.get_interval_text())
+
+        self.next_label.config(text=self.get_next_price_text())
+
+        self.today_title_label.config(text=self.get_today_title())
+
+        self.tomorrow_title_label.config(text=self.get_tomorrow_title())
+
+        self.today_stats_label.config(text=self.get_today_stats_text())
+
+        self.tomorrow_stats_label.config(text=self.get_tomorrow_stats_text())
+
+        self.update_status_label.config(text=self.get_update_status_text())
+
+        # ---------- Графики ----------
+
+        self.draw_15min_chart(
+            self.today_canvas,
+            self.today_prices,
+            show_current_time=True,
+        )
+
+        self.enable_hover(
+            self.today_canvas,
+            self.today_prices,
+        )
 
         self.draw_15min_chart(
             self.tomorrow_canvas,
@@ -916,16 +969,48 @@ class PricePanel:
             self.tomorrow_prices,
         )
 
+        # ---------- Таблица ----------
+
         if self.table_visible:
             self.build_table()
 
+        # Планируем следующую рыночную границу.
+        self.schedule_next_market_update()
+
+    def schedule_next_market_update(self):
+        """
+        Планирует обновление на следующую
+        границу 15-минутного интервала + 5 секунд.
+        """
+
+        now = datetime.now()
+
+        minute_block = (now.minute // 15) * 15
+
+        current_boundary = now.replace(
+            minute=minute_block,
+            second=0,
+            microsecond=0,
+        )
+
+        next_boundary = current_boundary + timedelta(minutes=15) + timedelta(seconds=5)
+
+        delay_seconds = (next_boundary - now).total_seconds()
+
+        # Минимум 1 секунда на случай
+        # редкого граничного состояния.
+        delay_ms = max(
+            1000,
+            int(delay_seconds * 1000),
+        )
+
         self.root.after(
-            self.TOMORROW_REFRESH_MS,
-            self.refresh_tomorrow_data,
+            delay_ms,
+            self.refresh_all_data,
         )
 
     def get_work_area(self):
-        """Получает реальную рабочую область Windows."""
+        """Получает рабочую область Windows."""
 
         SPI_GETWORKAREA = 0x0030
 
@@ -944,13 +1029,7 @@ class PricePanel:
         return rect
 
     def position_near_tray(self):
-        """
-        Размещает панель над taskbar.
-
-        В режиме таблицы автоматически
-        ограничивает высоту рабочей областью
-        и поднимает окно вверх.
-        """
+        """Позиционирует окно в рабочей области Windows."""
 
         self.root.update_idletasks()
 
@@ -962,11 +1041,8 @@ class PricePanel:
 
             work_height = area.bottom - area.top
 
-            # Небольшой безопасный отступ
             margin = 8
 
-            # Не позволяем окну быть выше
-            # доступной рабочей области.
             actual_height = min(
                 self.window_height,
                 work_height - margin * 2,
@@ -977,21 +1053,14 @@ class PricePanel:
                 work_width - margin * 2,
             )
 
-            # Прижимаем к правому краю.
             x = area.right - actual_width - margin
 
             if self.table_visible:
 
-                # В раскрытом режиме окно
-                # максимально поднимаем,
-                # чтобы нижняя рамка и таблица
-                # гарантированно были видны.
                 y = area.top + margin
 
             else:
 
-                # Обычный режим остаётся
-                # возле панели задач.
                 y = area.bottom - actual_height - margin
 
             self.root.geometry(f"{actual_width}x" f"{actual_height}" f"+{x}+{y}")
