@@ -45,6 +45,7 @@ class TrayIcon:
                 pystray.MenuItem(
                     "Открыть панель",
                     self.open_panel,
+                    default=True,
                 ),
                 pystray.MenuItem(
                     "Обновить",
