@@ -23,7 +23,7 @@ The application retrieves electricity price data from **Elering Estfeed** and di
 
 ## Screenshot
 
-![ElectricityTray interface](docs/screenshot.PNG)
+![ElectricityTray interface](docs/screenshot.png)
 
 ## Languages
 
