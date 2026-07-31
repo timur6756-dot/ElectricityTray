@@ -21,17 +21,24 @@ class TrayIcon:
         else:
             self.next_price = None
 
-        # Сколько почасовых значений на завтра
-        # было известно при последней проверке.
         self.tomorrow_count = 0
-
-        # Дата, для которой сейчас ведётся
-        # мониторинг следующего дня.
         self.tomorrow_monitor_date = datetime.now().date()
+
+        # -----------------------------
+        # Управление единственной панелью
+        # -----------------------------
+
+        self.panel = None
+        self.panel_open = False
+
+        self.panel_lock = threading.Lock()
+
+        # Сигнал существующему окну:
+        # "покажись и выйди на передний план".
+        self.show_panel_event = threading.Event()
 
         try:
             tomorrow = elering.get_tomorrow_hourly_prices()
-
             self.tomorrow_count = len(tomorrow)
 
         except Exception:
@@ -60,11 +67,12 @@ class TrayIcon:
 
         self.running = True
 
-    def get_price_color(
-        self,
-        price,
-    ):
-        """Возвращает цвет молнии по текущей цене."""
+    # ==========================================================
+    # ICON
+    # ==========================================================
+
+    def get_price_color(self, price):
+        """Цвет молнии по текущей цене."""
 
         if price < config.PRICE_CHEAP:
             return "green"
@@ -77,11 +85,8 @@ class TrayIcon:
 
         return "red"
 
-    def create_icon(
-        self,
-        price,
-    ):
-        """Создаёт иконку: цена сверху, молния снизу."""
+    def create_icon(self, price):
+        """Создаёт значок tray."""
 
         image = Image.new(
             "RGB",
@@ -137,26 +142,30 @@ class TrayIcon:
         return image
 
     def create_tooltip(self):
-        """Создаёт текст подсказки tray."""
+        """Подсказка возле значка."""
 
         lines = [
             "Nord Pool Estonia",
-            (f"Сейчас: " f"{self.price:.2f} c/kWh"),
+            f"Сейчас: {self.price:.2f} c/kWh",
         ]
 
         if self.next_price is not None:
-            lines.append("Следующие 15 мин: " f"{self.next_price:.2f} " "c/kWh")
+            lines.append(f"Следующие 15 мин: " f"{self.next_price:.2f} c/kWh")
 
         if self.tomorrow_count > 0:
-            lines.append("Завтра опубликовано: " f"{self.tomorrow_count}/24 ч")
+            lines.append(f"Завтра опубликовано: " f"{self.tomorrow_count}/96")
 
         else:
             lines.append("Завтра: данных пока нет")
 
         return "\n".join(lines)
 
+    # ==========================================================
+    # PRICE UPDATE
+    # ==========================================================
+
     def update_prices(self):
-        """Обновляет текущую и следующую 15-минутную цену."""
+        """Обновляет текущую цену."""
 
         prices = elering.get_current_and_next_estonia_price()
 
@@ -173,39 +182,57 @@ class TrayIcon:
         self.icon.title = self.create_tooltip()
 
     def update_tomorrow_prices(self):
-        """Проверяет появление новых почасовых цен на завтра."""
+        """Проверяет публикацию цен завтра."""
 
         tomorrow = elering.get_tomorrow_hourly_prices()
 
         new_count = len(tomorrow)
-
         old_count = self.tomorrow_count
 
         self.tomorrow_count = new_count
 
         self.icon.title = self.create_tooltip()
 
-        # Уведомляем только тогда,
-        # когда реально появились новые значения.
         if new_count > old_count:
 
             try:
                 self.icon.notify(
-                    ("Опубликованы новые " "цены на завтра: " f"{new_count}/24 часов"),
+                    (
+                        "Опубликованы новые "
+                        "цены на завтра: "
+                        f"{new_count}/96 интервалов"
+                    ),
                     "Electricity Estonia",
                 )
 
             except Exception:
-                # Если системное уведомление
-                # недоступно, приложение продолжает работу.
                 pass
 
-    def open_panel(
-        self,
-        icon,
-        item,
-    ):
-        """Открывает информационную панель."""
+    # ==========================================================
+    # PANEL
+    # ==========================================================
+
+    def open_panel(self, icon, item):
+        """
+        Левый клик по значку.
+
+        Если панели нет — создаём её.
+        Если она уже существует —
+        отправляем ей сигнал подняться.
+        """
+
+        with self.panel_lock:
+
+            if self.panel_open:
+
+                self.show_panel_event.set()
+                return
+
+            # ВАЖНО:
+            # флаг ставим до запуска потока,
+            # чтобы быстрый двойной клик
+            # не создал два окна.
+            self.panel_open = True
 
         panel_thread = threading.Thread(
             target=self.run_panel,
@@ -215,34 +242,107 @@ class TrayIcon:
         panel_thread.start()
 
     def run_panel(self):
-        """Создаёт и запускает PricePanel."""
-
-        panel = PricePanel(
-            current_price=self.price,
-            next_price=self.next_price,
-        )
-
-        panel.run()
-
-    def refresh(
-        self,
-        icon,
-        item,
-    ):
-        """Ручное обновление всех данных."""
+        """Работает исключительно в потоке Tkinter."""
 
         try:
+
+            panel = PricePanel(
+                current_price=self.price,
+                next_price=self.next_price,
+            )
+
+            self.panel = panel
+
+            panel.root.protocol(
+                "WM_DELETE_WINDOW",
+                panel.root.destroy,
+            )
+
+            # Tkinter сам проверяет Event.
+            # Никаких вызовов Tk из потока pystray.
+            self.check_panel_activation()
+
+            panel.run()
+
+        finally:
+
+            self.panel = None
+
+            self.show_panel_event.clear()
+
+            with self.panel_lock:
+                self.panel_open = False
+
+    def check_panel_activation(self):
+        """
+        Выполняется только Tk-потоком.
+
+        Если tray запросил показ панели —
+        окно поднимает само себя.
+        """
+
+        if self.panel is None:
+            return
+
+        root = self.panel.root
+
+        try:
+
+            if self.show_panel_event.is_set():
+
+                self.show_panel_event.clear()
+
+                root.deiconify()
+                root.lift()
+
+                # Короткий topmost гарантирует,
+                # что окно окажется впереди.
+                root.attributes(
+                    "-topmost",
+                    True,
+                )
+
+                root.after(
+                    100,
+                    lambda: root.attributes(
+                        "-topmost",
+                        False,
+                    ),
+                )
+
+                root.focus_force()
+
+            # Проверяем сигнал 5 раз/сек.
+            root.after(
+                200,
+                self.check_panel_activation,
+            )
+
+        except Exception:
+            pass
+
+    # ==========================================================
+    # MENU
+    # ==========================================================
+
+    def refresh(self, icon, item):
+        """Ручное обновление."""
+
+        try:
+
             self.update_prices()
             self.update_tomorrow_prices()
 
         except Exception as error:
-            self.icon.title = f"Ошибка обновления: " f"{error}"
+
+            self.icon.title = f"Ошибка обновления: {error}"
+
+    # ==========================================================
+    # BACKGROUND LOOPS
+    # ==========================================================
 
     def current_price_loop(self):
-        """
-        Автоматически обновляет текущую цену
-        на границах 15-минутных интервалов.
-        """
+        """Обновляет текущую цену каждые 15 минут."""
 
         while self.running:
 
@@ -261,16 +361,11 @@ class TrayIcon:
                 self.update_prices()
 
             except Exception as error:
-                self.icon.title = f"Ошибка цены: " f"{error}"
+
+                self.icon.title = f"Ошибка цены: {error}"
 
     def tomorrow_price_loop(self):
-        """
-        Проверяет цены на завтра каждые 15 минут,
-        пока не опубликован полный день.
-
-        После получения 24 часов лишние запросы
-        прекращаются до смены календарной даты.
-        """
+        """Проверяет публикацию завтрашних цен."""
 
         while self.running:
 
@@ -281,44 +376,48 @@ class TrayIcon:
 
             today = datetime.now().date()
 
-            # Наступили новые сутки.
-            # Вчерашнее "завтра" стало сегодняшним,
-            # поэтому начинаем мониторинг заново.
             if today != self.tomorrow_monitor_date:
-                self.tomorrow_monitor_date = today
 
+                self.tomorrow_monitor_date = today
                 self.tomorrow_count = 0
 
-                # Обновляем tooltip,
-                # чтобы старое 24/24 исчезло.
                 self.icon.title = self.create_tooltip()
 
-            # Если полный следующий день
-            # уже опубликован, API больше
-            # не опрашиваем до смены даты.
-            if self.tomorrow_count >= 24:
+            if self.tomorrow_count >= 96:
                 continue
 
             try:
                 self.update_tomorrow_prices()
 
             except Exception:
-                # Ошибки сети не должны
-                # останавливать приложение.
                 pass
 
-    def exit_program(
-        self,
-        icon,
-        item,
-    ):
+    # ==========================================================
+    # EXIT
+    # ==========================================================
+
+    def exit_program(self, icon, item):
         """Завершает приложение."""
 
         self.running = False
+
+        # Если панель существует,
+        # просим её закрыться в её собственном потоке.
+        if self.panel is not None:
+
+            try:
+                self.panel.root.after(
+                    0,
+                    self.panel.root.destroy,
+                )
+
+            except Exception:
+                pass
+
         icon.stop()
 
     def run(self):
-        """Запускает фоновые процессы и системный tray."""
+        """Запускает фоновые потоки и tray."""
 
         current_thread = threading.Thread(
             target=self.current_price_loop,
