@@ -1,8 +1,8 @@
-from PIL import Image, ImageDraw, ImageFont
-import pystray
 import threading
-import time
 from datetime import datetime
+
+import pystray
+from PIL import Image, ImageDraw, ImageFont
 
 import config
 import elering
@@ -23,24 +23,46 @@ from settings import (
 
 class TrayIcon:
 
+    # Как часто проверяем системное время и состояние обновления.
+    TIME_CHECK_SECONDS = 30
+
+    # Если между проверками прошло больше этого времени,
+    # считаем, что Windows выходила из сна или гибернации.
+    SLEEP_DETECTION_SECONDS = 90
+
+    # Как часто проверяем цены следующего дня.
+    TOMORROW_CHECK_SECONDS = 15 * 60
+
+    # Windows ограничивает длину tooltip tray.
+    MAX_TRAY_TITLE_LENGTH = 127
+
     def __init__(self):
 
-        # ---------------------------------
-        # Language
-        # ---------------------------------
+        # ==================================================
+        # LANGUAGE
+        # ==================================================
 
-        settings = load_settings()
+        user_settings = load_settings()
 
         self.language = normalize_language(
-            settings.get(
+            user_settings.get(
                 "language",
                 "ru",
             )
         )
 
-        # ---------------------------------
-        # Price
-        # ---------------------------------
+        # ==================================================
+        # APPLICATION STATE
+        # ==================================================
+
+        self.running = True
+
+        # Общий сигнал остановки фоновых потоков.
+        self.stop_event = threading.Event()
+
+        # ==================================================
+        # CURRENT PRICE
+        # ==================================================
 
         prices = elering.get_current_and_next_estonia_price()
 
@@ -54,9 +76,9 @@ class TrayIcon:
 
             self.next_price = None
 
-        # ---------------------------------
-        # Tomorrow
-        # ---------------------------------
+        # ==================================================
+        # TOMORROW
+        # ==================================================
 
         self.tomorrow_count = 0
 
@@ -72,22 +94,25 @@ class TrayIcon:
 
             self.tomorrow_count = 0
 
-        # ---------------------------------
-        # Panel single instance
-        # ---------------------------------
+        # ==================================================
+        # SINGLE PANEL
+        # ==================================================
 
         self.panel = None
         self.panel_open = False
 
         self.panel_lock = threading.Lock()
 
+        # Сигнал существующей панели:
+        # выйти на передний план.
         self.show_panel_event = threading.Event()
 
+        # Сигнал закрыть панель из её Tk-потока.
         self.close_panel_event = threading.Event()
 
-        # ---------------------------------
-        # Tray
-        # ---------------------------------
+        # ==================================================
+        # TRAY ICON
+        # ==================================================
 
         self.icon = pystray.Icon(
             "ElectricityTray",
@@ -96,20 +121,79 @@ class TrayIcon:
             menu=self.create_menu(),
         )
 
-        self.running = True
+    # ======================================================
+    # SAFE TRAY TITLE
+    # ======================================================
+
+    def set_tray_title(
+        self,
+        text,
+    ):
+        """
+        Безопасно устанавливает tooltip tray.
+
+        Windows ограничивает длину строки.
+        Длинное исключение не должно завершать
+        фоновый поток обновления.
+        """
+
+        safe_text = (
+            str(text)
+            .replace(
+                "\r",
+                " ",
+            )
+            .replace(
+                "\n",
+                " ",
+            )
+        )
+
+        safe_text = safe_text[: self.MAX_TRAY_TITLE_LENGTH]
+
+        try:
+
+            self.icon.title = safe_text
+
+        except Exception:
+
+            # Ошибка tooltip не должна
+            # останавливать приложение.
+            pass
+
+    def set_update_error_title(self):
+        """
+        Показывает короткое сообщение
+        о временной недоступности Elering.
+        """
+
+        messages = {
+            "ru": ("Нет соединения с Elering. " "Повтор через 30 секунд."),
+            "en": ("Cannot connect to Elering. " "Retrying in 30 seconds."),
+            "et": ("Eleringiga ei saa ühendust. " "Uus katse 30 sekundi pärast."),
+        }
+
+        self.set_tray_title(
+            messages.get(
+                self.language,
+                messages["ru"],
+            )
+        )
 
     # ======================================================
     # LANGUAGE
     # ======================================================
 
     def get_language(self):
+        """Возвращает текущий язык."""
+
         return self.language
 
     def set_language(
         self,
         language,
     ):
-        """Меняет язык всего приложения."""
+        """Меняет язык интерфейса."""
 
         language = normalize_language(language)
 
@@ -117,15 +201,17 @@ class TrayIcon:
 
         save_language(language)
 
-        self.icon.title = self.create_tooltip()
+        self.set_tray_title(self.create_tooltip())
 
-        # Перестраиваем tray menu.
+        # Пересоздаём локализованное меню tray.
         self.icon.menu = self.create_menu()
 
         try:
+
             self.icon.update_menu()
 
         except Exception:
+
             pass
 
     def create_menu(self):
@@ -186,13 +272,14 @@ class TrayIcon:
         )
 
     # ======================================================
-    # ICON
+    # TRAY ICON IMAGE
     # ======================================================
 
     def get_price_color(
         self,
         price,
     ):
+        """Определяет цвет молнии по цене."""
 
         if price < config.PRICE_CHEAP:
             return "green"
@@ -209,6 +296,7 @@ class TrayIcon:
         self,
         price,
     ):
+        """Создаёт изображение tray-значка."""
 
         image = Image.new(
             "RGB",
@@ -266,6 +354,7 @@ class TrayIcon:
         return image
 
     def create_tooltip(self):
+        """Создаёт локализованную подсказку tray."""
 
         lines = [
             "Nord Pool Estonia",
@@ -308,10 +397,11 @@ class TrayIcon:
         return "\n".join(lines)
 
     # ======================================================
-    # PRICE
+    # PRICE UPDATE
     # ======================================================
 
     def update_prices(self):
+        """Получает текущую и следующую цену."""
 
         prices = elering.get_current_and_next_estonia_price()
 
@@ -327,9 +417,10 @@ class TrayIcon:
 
         self.icon.icon = self.create_icon(self.price)
 
-        self.icon.title = self.create_tooltip()
+        self.set_tray_title(self.create_tooltip())
 
     def update_tomorrow_prices(self):
+        """Получает доступные цены следующего дня."""
 
         tomorrow = elering.get_tomorrow_hourly_prices()
 
@@ -339,7 +430,7 @@ class TrayIcon:
 
         self.tomorrow_count = new_count
 
-        self.icon.title = self.create_tooltip()
+        self.set_tray_title(self.create_tooltip())
 
         if new_count > old_count:
 
@@ -370,6 +461,12 @@ class TrayIcon:
         icon,
         item,
     ):
+        """
+        Открывает панель.
+
+        Если панель уже существует,
+        отправляет ей сигнал выйти вперёд.
+        """
 
         with self.panel_lock:
 
@@ -379,16 +476,21 @@ class TrayIcon:
 
                 return
 
+            # Ставим флаг до запуска потока,
+            # чтобы быстрый двойной клик
+            # не создал два окна.
             self.panel_open = True
 
         panel_thread = threading.Thread(
             target=self.run_panel,
             daemon=True,
+            name="ElectricityTrayPanel",
         )
 
         panel_thread.start()
 
     def run_panel(self):
+        """Создаёт и запускает единственную панель."""
 
         try:
 
@@ -423,6 +525,10 @@ class TrayIcon:
                 self.panel_open = False
 
     def check_panel_events(self):
+        """
+        Проверяет сигналы tray
+        внутри Tk-потока.
+        """
 
         if self.panel is None:
             return
@@ -471,7 +577,7 @@ class TrayIcon:
             pass
 
     # ======================================================
-    # REFRESH
+    # MANUAL REFRESH
     # ======================================================
 
     def refresh(
@@ -479,62 +585,123 @@ class TrayIcon:
         icon,
         item,
     ):
+        """Ручное обновление из меню tray."""
 
         try:
 
             self.update_prices()
-
             self.update_tomorrow_prices()
 
-        except Exception as error:
+        except Exception:
 
-            self.icon.title = t(
-                "update_error",
-                self.language,
-                error=error,
-            )
+            self.set_update_error_title()
 
     # ======================================================
-    # BACKGROUND
+    # TIME HELPERS
+    # ======================================================
+
+    @staticmethod
+    def get_interval_key(
+        moment,
+    ):
+        """
+        Возвращает уникальный ключ
+        текущего 15-минутного интервала.
+        """
+
+        return (
+            moment.year,
+            moment.month,
+            moment.day,
+            moment.hour,
+            moment.minute // 15,
+        )
+
+    # ======================================================
+    # CURRENT PRICE BACKGROUND LOOP
     # ======================================================
 
     def current_price_loop(self):
+        """
+        Контролирует текущую цену.
+
+        После сна Windows сеть может быть
+        временно недоступна. В этом случае
+        запрос повторяется через 30 секунд.
+        """
+
+        last_check = datetime.now()
+
+        # None заставляет выполнить
+        # обновление сразу после запуска.
+        last_interval = None
 
         while self.running:
 
             now = datetime.now()
 
-            minutes_until_next = 15 - (now.minute % 15)
+            current_interval = self.get_interval_key(now)
 
-            seconds_until_next = minutes_until_next * 60 - now.second + 5
+            elapsed_seconds = (now - last_check).total_seconds()
 
-            time.sleep(seconds_until_next)
+            resumed_from_sleep = elapsed_seconds > self.SLEEP_DETECTION_SECONDS
 
-            if not self.running:
+            interval_changed = current_interval != last_interval
+
+            should_update = (
+                last_interval is None or interval_changed or resumed_from_sleep
+            )
+
+            if should_update:
+
+                try:
+
+                    self.update_prices()
+
+                    # Интервал запоминаем только
+                    # после успешного запроса.
+                    last_interval = current_interval
+
+                except Exception:
+
+                    self.set_update_error_title()
+
+                    # last_interval не изменяем.
+                    # Через 30 секунд условие
+                    # снова вызовет update_prices().
+
+            last_check = now
+
+            if self.stop_event.wait(self.TIME_CHECK_SECONDS):
+
                 break
 
-            try:
-
-                self.update_prices()
-
-            except Exception as error:
-
-                self.icon.title = t(
-                    "price_error",
-                    self.language,
-                    error=error,
-                )
+    # ======================================================
+    # TOMORROW BACKGROUND LOOP
+    # ======================================================
 
     def tomorrow_price_loop(self):
+        """
+        Проверяет цены следующего дня.
+
+        После ошибки сети запрос также
+        повторяется, а поток не завершается.
+        """
+
+        last_check = datetime.now()
+
+        # Первая проверка выполняется сразу.
+        last_tomorrow_check = None
 
         while self.running:
 
-            time.sleep(15 * 60)
+            now = datetime.now()
 
-            if not self.running:
-                break
+            elapsed_since_loop_check = (now - last_check).total_seconds()
 
-            today = datetime.now().date()
+            resumed_from_sleep = elapsed_since_loop_check > self.SLEEP_DETECTION_SECONDS
+
+            today = now.date()
 
             if today != self.tomorrow_monitor_date:
 
@@ -542,18 +709,47 @@ class TrayIcon:
 
                 self.tomorrow_count = 0
 
-                self.icon.title = self.create_tooltip()
+                self.set_tray_title(self.create_tooltip())
 
-            if self.tomorrow_count >= 96:
-                continue
+                last_tomorrow_check = None
 
-            try:
+            if last_tomorrow_check is None:
 
-                self.update_tomorrow_prices()
+                check_due = True
 
-            except Exception:
+            else:
 
-                pass
+                seconds_since_tomorrow_check = (
+                    now - last_tomorrow_check
+                ).total_seconds()
+
+                check_due = seconds_since_tomorrow_check >= self.TOMORROW_CHECK_SECONDS
+
+            should_check = check_due or resumed_from_sleep
+
+            if should_check and self.tomorrow_count < 96:
+
+                try:
+
+                    self.update_tomorrow_prices()
+
+                    # Время проверки фиксируем
+                    # только после успешного запроса.
+                    last_tomorrow_check = now
+
+                except Exception:
+
+                    self.set_update_error_title()
+
+                    # Оставляем прежнее время,
+                    # чтобы через 30 секунд
+                    # запрос повторился.
+
+            last_check = now
+
+            if self.stop_event.wait(self.TIME_CHECK_SECONDS):
+
+                break
 
     # ======================================================
     # EXIT
@@ -564,8 +760,11 @@ class TrayIcon:
         icon,
         item,
     ):
+        """Полностью завершает приложение."""
 
         self.running = False
+
+        self.stop_event.set()
 
         if self.panel_open:
 
@@ -573,16 +772,23 @@ class TrayIcon:
 
         icon.stop()
 
+    # ======================================================
+    # START
+    # ======================================================
+
     def run(self):
+        """Запускает фоновые потоки и tray."""
 
         current_thread = threading.Thread(
             target=self.current_price_loop,
             daemon=True,
+            name="ElectricityTrayCurrentPrice",
         )
 
         tomorrow_thread = threading.Thread(
             target=self.tomorrow_price_loop,
             daemon=True,
+            name="ElectricityTrayTomorrowPrice",
         )
 
         current_thread.start()
